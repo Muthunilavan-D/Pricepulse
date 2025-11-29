@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1093855992848",
+    "project_id": "pricepulse-e7f39",
+    "storage_bucket": "pricepulse-e7f39.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1093855992848:android:0e4d19d889f07068affe95",
+        "android_client_info": {
+          "package_name": "com.example.price_pulse"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCLLF_Y6d7AzRiEcUcSa-HEjYb7020JeiI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

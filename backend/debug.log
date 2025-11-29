@@ -1,0 +1,66 @@
+Starting server...
+Loaded serviceAccountKey
+Initialized Firebase Admin
+Server running at http://localhost:5000
+Starting server...
+Loaded serviceAccountKey
+Initialized Firebase Admin
+Server running at http://localhost:5000
+Starting server...
+Loaded serviceAccountKey
+Initialized Firebase Admin
+Server running at http://localhost:5000
+Starting server...
+Loaded serviceAccountKey
+Initialized Firebase Admin
+Server running at http://localhost:5000
+Starting server...
+Loaded serviceAccountKey
+Initialized Firebase Admin
+Server running at http://localhost:5000
+Starting server...
+Loaded serviceAccountKey
+Initialized Firebase Admin
+Server running at http://localhost:5000
+Starting server...
+Loaded serviceAccountKey
+Initialized Firebase Admin
+Server running at http://localhost:5000
+Starting server...
+Loaded serviceAccountKey
+Initialized Firebase Admin
+Server running at http://0.0.0.0:5000
+Scraping URL: https://amzn.in/d/bdgbX7s
+ERROR: Price not found on page
+Starting server...
+Loaded serviceAccountKey
+Initialized Firebase Admin
+Server running at http://0.0.0.0:5000
+Scraping URL: https://amzn.in/d/bdgbX7s
+ERROR: Price not found on page
+[2025-11-29T08:57:54.576Z] === Starting PricePulse Backend Server ===
+[2025-11-29T08:57:54.582Z] ✓ Loaded serviceAccountKey.json
+[2025-11-29T08:57:54.655Z] ✓ Initialized Firebase Admin
+[2025-11-29T08:57:54.854Z] ✓ Connected to Firestore
+[2025-11-29T08:57:54.872Z] ===========================================
+[2025-11-29T08:57:54.873Z] ✓ SERVER STARTED SUCCESSFULLY
+[2025-11-29T08:57:54.874Z] ✓ Listening on all network interfaces
+[2025-11-29T08:57:54.874Z] ✓ Port: 5000
+[2025-11-29T08:57:54.875Z] ✓ Local: http://localhost:5000
+[2025-11-29T08:57:54.876Z] ✓ Network: http://192.168.31.248:5000
+[2025-11-29T08:57:54.877Z] ===========================================
+[2025-11-29T08:57:54.878Z] Server is running. Press Ctrl+C to stop.
+[2025-11-29T08:57:54.880Z] FATAL ERROR: listen EADDRINUSE: address already in use 0.0.0.0:5000
+[2025-11-29T08:58:35.953Z] === Starting PricePulse Backend Server ===
+[2025-11-29T08:58:35.957Z] ✓ Loaded serviceAccountKey.json
+[2025-11-29T08:58:36.039Z] ✓ Initialized Firebase Admin
+[2025-11-29T08:58:36.241Z] ✓ Connected to Firestore
+[2025-11-29T08:58:36.259Z] ===========================================
+[2025-11-29T08:58:36.260Z] ✓ SERVER STARTED SUCCESSFULLY
+[2025-11-29T08:58:36.260Z] ✓ Listening on all network interfaces
+[2025-11-29T08:58:36.261Z] ✓ Port: 5000
+[2025-11-29T08:58:36.262Z] ✓ Local: http://localhost:5000
+[2025-11-29T08:58:36.263Z] ✓ Network: http://192.168.31.248:5000
+[2025-11-29T08:58:36.264Z] ===========================================
+[2025-11-29T08:58:36.265Z] Server is running. Press Ctrl+C to stop.
+[2025-11-29T08:58:36.265Z] FATAL ERROR: listen EADDRINUSE: address already in use 0.0.0.0:5000
