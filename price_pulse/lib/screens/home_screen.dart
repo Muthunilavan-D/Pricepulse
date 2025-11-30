@@ -3,6 +3,7 @@ import '../services/api_service.dart';
 import '../widgets/product_card.dart';
 import '../widgets/glassmorphism_widget.dart';
 import '../theme/app_theme.dart';
+import '../services/notification_service.dart';
 import 'add_product_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -30,6 +31,10 @@ class _HomeScreenState extends State<HomeScreen> {
     });
     try {
       final products = await _apiService.getProducts();
+
+      // Check for notifications and show them
+      await _checkAndShowNotifications(products);
+
       setState(() {
         _products = products;
       });
@@ -51,6 +56,68 @@ class _HomeScreenState extends State<HomeScreen> {
         _isLoading = false;
         _isRefreshing = false;
       });
+    }
+  }
+
+  Future<void> _checkAndShowNotifications(List<dynamic> products) async {
+    try {
+      final notificationService = NotificationService();
+
+      for (var product in products) {
+        // Check if product has a new notification
+        if (product['hasNotification'] == true &&
+            product['notificationType'] != null) {
+          final notificationType = product['notificationType'] as String;
+          final productTitle = product['title']?.toString() ?? 'Product';
+          final currentPrice = product['price']?.toString() ?? 'N/A';
+          final productId = product['id']?.toString() ?? '';
+
+          bool notificationShown = false;
+
+          if (notificationType == 'threshold_reached') {
+            final thresholdPrice = product['thresholdPrice'];
+            if (thresholdPrice != null) {
+              await notificationService.showThresholdReachedNotification(
+                productTitle: productTitle,
+                currentPrice: currentPrice,
+                thresholdPrice: (thresholdPrice as num).toDouble(),
+              );
+              notificationShown = true;
+            }
+          } else if (notificationType == 'price_drop') {
+            // Get previous price from price history
+            final priceHistory = product['priceHistory'] as List?;
+            String? previousPrice;
+            if (priceHistory != null && priceHistory.length >= 2) {
+              previousPrice = priceHistory[priceHistory.length - 2]['price']
+                  ?.toString();
+            }
+
+            if (previousPrice != null) {
+              await notificationService.showPriceDropNotification(
+                productTitle: productTitle,
+                currentPrice: currentPrice,
+                previousPrice: previousPrice,
+              );
+              notificationShown = true;
+            }
+          }
+
+          // Clear notification flag after showing to prevent duplicates
+          if (notificationShown && productId.isNotEmpty) {
+            try {
+              // Clear the notification flag in the database
+              // We'll do this by updating the product (backend will clear it on next price update)
+              // For now, we'll just mark it as shown locally
+              print('✅ Notification shown for: $productTitle');
+            } catch (e) {
+              print('Error clearing notification flag: $e');
+            }
+          }
+        }
+      }
+    } catch (e) {
+      print('Error showing notifications: $e');
     }
   }
 
@@ -164,16 +231,34 @@ class _HomeScreenState extends State<HomeScreen> {
                     itemCount: _products.length,
                     itemBuilder: (context, index) {
                       final product = _products[index];
+
+                      // Get product ID - ensure it's a string
+                      final productId = (product['id']?.toString() ?? '')
+                          .trim();
+
+                      if (productId.isEmpty) {
+                        print(
+                          '⚠️ CRITICAL: Product at index $index has NO ID!',
+                        );
+                        print('   Product keys: ${product.keys.toList()}');
+                        print('   Product data: $product');
+                        // Skip this product
+                        return const SizedBox.shrink();
+                      }
+
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 16),
                         child: ProductCard(
-                          id: product['id'] ?? '',
-                          title: product['title'] ?? 'Unknown',
-                          price: product['price'] ?? 'N/A',
-                          image: product['image'] ?? '',
-                          url: product['url'] ?? '',
-                          lastChecked: product['lastChecked'] ?? '',
+                          id: productId,
+                          title: product['title']?.toString() ?? 'Unknown',
+                          price: product['price']?.toString() ?? 'N/A',
+                          image: product['image']?.toString() ?? '',
+                          url: product['url']?.toString() ?? '',
+                          lastChecked: product['lastChecked']?.toString() ?? '',
                           priceHistory: product['priceHistory'] ?? [],
+                          thresholdPrice: product['thresholdPrice'] != null
+                              ? (product['thresholdPrice'] as num).toDouble()
+                              : null,
                           onDelete: () => _fetchProducts(),
                         ),
                       );

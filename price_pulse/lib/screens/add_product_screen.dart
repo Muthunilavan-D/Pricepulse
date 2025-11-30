@@ -12,8 +12,10 @@ class AddProductScreen extends StatefulWidget {
 
 class _AddProductScreenState extends State<AddProductScreen> {
   final TextEditingController _urlController = TextEditingController();
+  final TextEditingController _thresholdController = TextEditingController();
   final ApiService _apiService = ApiService();
   bool _isLoading = false;
+  bool _enableThreshold = false;
 
   void _trackProduct() async {
     final url = _urlController.text.trim();
@@ -54,16 +56,44 @@ class _AddProductScreenState extends State<AddProductScreen> {
       _isLoading = true;
     });
 
+    // Parse threshold if provided - validation will happen on backend after scraping
+    double? threshold;
+    if (_enableThreshold && _thresholdController.text.trim().isNotEmpty) {
+      final thresholdValue = double.tryParse(_thresholdController.text.trim());
+      if (thresholdValue == null || thresholdValue <= 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Please enter a valid threshold price'),
+            backgroundColor: AppTheme.accentOrange,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        );
+        setState(() {
+          _isLoading = false;
+        });
+        return;
+      }
+      threshold = thresholdValue;
+    }
+
     try {
-      await _apiService.trackProduct(_urlController.text.trim());
+      await _apiService.trackProduct(
+        _urlController.text.trim(),
+        thresholdPrice: threshold,
+      );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: const Row(
+            content: Row(
               children: [
-                Icon(Icons.check_circle, color: Colors.white),
-                SizedBox(width: 8),
-                Text('Product added successfully!'),
+                const Icon(Icons.check_circle, color: Colors.white),
+                const SizedBox(width: 8),
+                Text(threshold != null 
+                  ? 'Product added with threshold ₹${threshold.toStringAsFixed(0)}!' 
+                  : 'Product added successfully!'),
               ],
             ),
             backgroundColor: AppTheme.accentGreen,
@@ -115,6 +145,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
   @override
   void dispose() {
     _urlController.dispose();
+    _thresholdController.dispose();
     super.dispose();
   }
 
@@ -170,6 +201,59 @@ class _AddProductScreenState extends State<AddProductScreen> {
                         style: const TextStyle(color: AppTheme.textPrimary),
                         maxLines: 3,
                       ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 24),
+                // Threshold Price Section
+                GlassContainer(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.notifications_active_rounded,
+                            color: AppTheme.accentBlue,
+                            size: 24,
+                          ),
+                          const SizedBox(width: 12),
+                          Text(
+                            'Price Alert (Optional)',
+                            style: Theme.of(context).textTheme.titleLarge,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      SwitchListTile(
+                        title: const Text('Set price alert threshold'),
+                        subtitle: const Text('Get notified when price drops'),
+                        value: _enableThreshold,
+                        onChanged: (value) {
+                          setState(() {
+                            _enableThreshold = value;
+                            if (!value) {
+                              _thresholdController.clear();
+                            }
+                          });
+                        },
+                        activeColor: AppTheme.accentBlue,
+                      ),
+                      if (_enableThreshold) ...[
+                        const SizedBox(height: 16),
+                        TextField(
+                          controller: _thresholdController,
+                          decoration: InputDecoration(
+                            labelText: 'Threshold Price (₹)',
+                            hintText: 'Enter price below current price',
+                            prefixIcon: const Icon(Icons.attach_money_rounded),
+                            helperText: 'You\'ll be notified when price drops to or below this amount',
+                          ),
+                          keyboardType: TextInputType.number,
+                          style: const TextStyle(color: AppTheme.textPrimary),
+                        ),
+                      ],
                     ],
                   ),
                 ),
