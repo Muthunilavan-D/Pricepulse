@@ -488,8 +488,6 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                             Text(
                               widget.title,
                               style: Theme.of(context).textTheme.titleLarge,
-                              maxLines: 3,
-                              overflow: TextOverflow.ellipsis,
                             ),
                             const SizedBox(height: 12),
                             Text(

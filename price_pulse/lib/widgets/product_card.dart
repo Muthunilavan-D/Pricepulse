@@ -37,6 +37,15 @@ class ProductCard extends StatefulWidget {
 class _ProductCardState extends State<ProductCard> {
   bool _showDetails = false;
 
+  // Get short title (first 4 words)
+  String _getShortTitle(String title) {
+    final words = title.trim().split(' ');
+    if (words.length <= 5) {
+      return title;
+    }
+    return words.take(5).join(' ') ;
+  }
+
   // Parse price to number for comparison
   double? _parsePrice(String priceStr) {
     try {
@@ -316,13 +325,15 @@ class _ProductCardState extends State<ProductCard> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                widget.title,
+                                _getShortTitle(widget.title),
                                 style: Theme.of(context).textTheme.titleMedium,
                                 maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
                               ),
                               const SizedBox(height: 8),
-                              Row(
+                              Wrap(
+                                spacing: 8,
+                                crossAxisAlignment: WrapCrossAlignment.center,
                                 children: [
                                   Text(
                                     PriceFormatter.formatPrice(widget.price),
@@ -333,7 +344,6 @@ class _ProductCardState extends State<ProductCard> {
                                       letterSpacing: 0.5,
                                     ),
                                   ),
-                                  const SizedBox(width: 8),
                                   _getPriceChangeIndicator(),
                                 ],
                               ),
