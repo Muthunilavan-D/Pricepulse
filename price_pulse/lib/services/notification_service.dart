@@ -1,6 +1,7 @@
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'api_service.dart';
 
 class NotificationService {
   static final NotificationService _instance = NotificationService._internal();
@@ -20,7 +21,9 @@ class NotificationService {
     await _requestPermissions();
 
     // Initialize local notifications
-    const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const androidSettings = AndroidInitializationSettings(
+      '@mipmap/ic_launcher',
+    );
     const iosSettings = DarwinInitializationSettings(
       requestAlertPermission: true,
       requestBadgePermission: true,
@@ -47,7 +50,8 @@ class NotificationService {
 
     await _localNotifications
         .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>()
+          AndroidFlutterLocalNotificationsPlugin
+        >()
         ?.createNotificationChannel(androidChannel);
 
     // Handle foreground messages
@@ -56,9 +60,20 @@ class NotificationService {
     // Handle background message taps
     FirebaseMessaging.onMessageOpenedApp.listen(_handleBackgroundMessageTap);
 
-    // Get FCM token
+    // Get FCM token and register with backend
     final token = await _firebaseMessaging.getToken();
     print('FCM Token: $token');
+
+    // Register token with backend (deferred to avoid circular dependency)
+    if (token != null) {
+      _registerTokenWithBackend(token);
+    }
+
+    // Listen for token refresh
+    _firebaseMessaging.onTokenRefresh.listen((newToken) {
+      print('FCM Token refreshed: $newToken');
+      _registerTokenWithBackend(newToken);
+    });
 
     _initialized = true;
   }
@@ -66,6 +81,17 @@ class NotificationService {
   Future<void> _requestPermissions() async {
     if (await Permission.notification.isDenied) {
       await Permission.notification.request();
+    }
+  }
+
+  // Register FCM token with backend (deferred to avoid circular dependency)
+  Future<void> _registerTokenWithBackend(String token) async {
+    try {
+      // Use dynamic import to avoid circular dependency
+      final apiService = ApiService();
+      await apiService.registerFCMToken(token);
+    } catch (e) {
+      print('⚠️ Failed to register FCM token with backend: $e');
     }
   }
 
@@ -133,7 +159,8 @@ class NotificationService {
   }) async {
     await showLocalNotification(
       title: '🎯 Price Alert!',
-      body: '$productTitle dropped to $currentPrice (Threshold: ₹${thresholdPrice.toStringAsFixed(0)})',
+      body:
+          '$productTitle dropped to $currentPrice (Threshold: ₹${thresholdPrice.toStringAsFixed(0)})',
       payload: 'threshold_reached',
     );
   }
@@ -150,4 +177,3 @@ class NotificationService {
     );
   }
 }
-

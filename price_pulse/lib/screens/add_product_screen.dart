@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 import '../services/api_service.dart';
 import '../widgets/glassmorphism_widget.dart';
 import '../theme/app_theme.dart';
@@ -80,6 +82,78 @@ class _AddProductScreenState extends State<AddProductScreen> {
     }
 
     try {
+      // First, scrape to get current price for threshold validation (if threshold is provided)
+      if (threshold != null) {
+        try {
+          final scrapeResponse = await http
+              .get(
+                Uri.parse(
+                  '${_apiService.baseUrl}/scrape?url=${Uri.encodeComponent(_urlController.text.trim())}',
+                ),
+              )
+              .timeout(const Duration(seconds: 30));
+
+          if (scrapeResponse.statusCode == 200) {
+            final scrapeData = json.decode(scrapeResponse.body);
+            final priceStr = scrapeData['price']?.toString() ?? '';
+            final currentPrice = double.tryParse(
+              priceStr.replaceAll('₹', '').replaceAll(',', '').trim(),
+            );
+
+            if (currentPrice != null) {
+              final thresholdValue = threshold;
+              // Check if threshold is too low (less than 50% of current price)
+              final thresholdPercentage = (thresholdValue / currentPrice) * 100;
+              if (thresholdPercentage < 50) {
+                // Show confirmation dialog
+                final shouldProceed = await showDialog<bool>(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    backgroundColor: AppTheme.secondaryDark,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    title: const Text(
+                      'Threshold Price Too Low',
+                      style: TextStyle(color: AppTheme.textPrimary),
+                    ),
+                    content: Text(
+                      'The threshold price (₹${thresholdValue.toStringAsFixed(0)}) is ${thresholdPercentage.toStringAsFixed(1)}% of the current price (₹${currentPrice.toStringAsFixed(0)}).\n\n'
+                      'A price drop of ${(100 - thresholdPercentage).toStringAsFixed(1)}% is very unlikely. Are you sure you want to set this threshold?',
+                      style: const TextStyle(color: AppTheme.textSecondary),
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, false),
+                        child: const Text('Cancel'),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, true),
+                        style: TextButton.styleFrom(
+                          foregroundColor: AppTheme.accentOrange,
+                        ),
+                        child: const Text('Yes, Set Threshold'),
+                      ),
+                    ],
+                  ),
+                );
+
+                if (shouldProceed != true) {
+                  setState(() {
+                    _isLoading = false;
+                  });
+                  return;
+                }
+              }
+            }
+          }
+        } catch (e) {
+          // If scrape fails, continue anyway - backend will validate
+          print('Warning: Could not pre-validate threshold: $e');
+        }
+      }
+
+      // Now add the product with threshold
       await _apiService.trackProduct(
         _urlController.text.trim(),
         thresholdPrice: threshold,
@@ -91,9 +165,11 @@ class _AddProductScreenState extends State<AddProductScreen> {
               children: [
                 const Icon(Icons.check_circle, color: Colors.white),
                 const SizedBox(width: 8),
-                Text(threshold != null 
-                  ? 'Product added with threshold ₹${threshold.toStringAsFixed(0)}!' 
-                  : 'Product added successfully!'),
+                Text(
+                  threshold != null
+                      ? 'Product added with threshold ₹${threshold.toStringAsFixed(0)}!'
+                      : 'Product added successfully!',
+                ),
               ],
             ),
             backgroundColor: AppTheme.accentGreen,
@@ -111,6 +187,12 @@ class _AddProductScreenState extends State<AddProductScreen> {
         String errorMessage = e.toString();
         if (errorMessage.startsWith('Exception: ')) {
           errorMessage = errorMessage.substring(11);
+        }
+
+        // Handle duplicate product error
+        if (errorMessage.contains('already being tracked') ||
+            errorMessage.contains('duplicate')) {
+          errorMessage = 'This product is already being tracked.';
         }
 
         ScaffoldMessenger.of(context).showSnackBar(
@@ -192,8 +274,13 @@ class _AddProductScreenState extends State<AddProductScreen> {
                         decoration: InputDecoration(
                           hintText: 'Paste Amazon or Flipkart link here',
                           helperText:
-                              'Example: https://amazon.in/dp/... or https://flipkart.com/...',
+                              'Example: https://amazon.in/...  or  \nhttps://flipkart.com/...',
                           prefixIcon: const Icon(Icons.shopping_bag_outlined),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 16,
+                          ),
+                          alignLabelWithHint: true,
                         ),
                         keyboardType: TextInputType.url,
                         textInputAction: TextInputAction.done,
@@ -247,8 +334,18 @@ class _AddProductScreenState extends State<AddProductScreen> {
                           decoration: InputDecoration(
                             labelText: 'Threshold Price (₹)',
                             hintText: 'Enter price below current price',
-                            prefixIcon: const Icon(Icons.attach_money_rounded),
-                            helperText: 'You\'ll be notified when price drops to or below this amount',
+                            prefixIcon: const Padding(
+                              padding: EdgeInsets.all(12.0),
+                              child: Text(
+                                '₹',
+                                style: TextStyle(
+                                  fontSize: 20,
+                                  color: AppTheme.textSecondary,
+                                ),
+                              ),
+                            ),
+                            helperText:
+                                'You\'ll be notified when price drops to or below this amount',
                           ),
                           keyboardType: TextInputType.number,
                           style: const TextStyle(color: AppTheme.textPrimary),

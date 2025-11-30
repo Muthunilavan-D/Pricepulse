@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:intl/intl.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../widgets/glassmorphism_widget.dart';
 import '../theme/app_theme.dart';
 import '../services/api_service.dart';
@@ -518,6 +519,69 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                       ),
                     ],
                   ),
+                ),
+                const SizedBox(height: 16),
+                // Visit Product Button
+                GlassButton(
+                  text: 'Visit Product on Website',
+                  onPressed: () async {
+                    try {
+                      String urlToLaunch = widget.url.trim();
+                      
+                      // Ensure URL has protocol
+                      if (!urlToLaunch.startsWith('http://') && 
+                          !urlToLaunch.startsWith('https://')) {
+                        urlToLaunch = 'https://$urlToLaunch';
+                      }
+                      
+                      // Ensure Flipkart URLs are properly formatted
+                      if (urlToLaunch.contains('flipkart.com')) {
+                        // Replace any flipkart.com with www.flipkart.com (unless it's dl.flipkart.com)
+                        if (!urlToLaunch.contains('www.flipkart.com') &&
+                            !urlToLaunch.contains('dl.flipkart.com') &&
+                            !urlToLaunch.contains('m.flipkart.com')) {
+                          urlToLaunch = urlToLaunch.replaceAll(
+                            'flipkart.com',
+                            'www.flipkart.com',
+                          );
+                        }
+                      }
+                      
+                      print('Launching URL: $urlToLaunch');
+                      final uri = Uri.parse(urlToLaunch);
+                      
+                      // Try to launch directly - canLaunchUrl sometimes fails for valid URLs
+                      try {
+                        await launchUrl(
+                          uri,
+                          mode: LaunchMode.externalApplication,
+                        );
+                      } catch (launchError) {
+                        // If direct launch fails, try with canLaunchUrl check
+                        if (await canLaunchUrl(uri)) {
+                          await launchUrl(
+                            uri,
+                            mode: LaunchMode.externalApplication,
+                          );
+                        } else {
+                          throw Exception('URL cannot be launched');
+                        }
+                      }
+                    } catch (e) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: const Text(
+                            'Could not open URL. Please check your internet connection.',
+                          ),
+                          backgroundColor: AppTheme.accentRed,
+                          behavior: SnackBarBehavior.floating,
+                          duration: const Duration(seconds: 3),
+                        ),
+                      );
+                      print('Error launching URL: $e');
+                      print('Original URL: ${widget.url}');
+                    }
+                  },
                 ),
                 const SizedBox(height: 16),
                 // Price Chart

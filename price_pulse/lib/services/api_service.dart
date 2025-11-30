@@ -29,13 +29,15 @@ class ApiService {
           .timeout(const Duration(seconds: 10));
 
       print('Get products response status: ${response.statusCode}');
-      
+
       if (response.statusCode == 200) {
         final products = json.decode(response.body) as List;
         print('✅ Fetched ${products.length} products');
         // Debug: Log first product's ID structure
         if (products.isNotEmpty) {
-          print('Sample product ID: "${products[0]['id']}" (type: ${products[0]['id'].runtimeType})');
+          print(
+            'Sample product ID: "${products[0]['id']}" (type: ${products[0]['id'].runtimeType})',
+          );
         }
         return products;
       } else {
@@ -54,13 +56,16 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> trackProduct(String url, {double? thresholdPrice}) async {
+  Future<Map<String, dynamic>> trackProduct(
+    String url, {
+    double? thresholdPrice,
+  }) async {
     try {
       final body = <String, dynamic>{'url': url.trim()};
       if (thresholdPrice != null) {
         body['thresholdPrice'] = thresholdPrice;
       }
-      
+
       print('Tracking product: url=$url, threshold=$thresholdPrice');
       final response = await http
           .post(
@@ -83,7 +88,7 @@ class ApiService {
         }
         throw Exception(errorMessage);
       }
-      
+
       // Return the product data including threshold
       try {
         final responseData = json.decode(response.body);
@@ -117,44 +122,75 @@ class ApiService {
         throw Exception('Product ID cannot be empty');
       }
 
-      print('Refreshing product: $productId');
+      print('🔄 API: Refreshing product: "$productId"');
+      print('🔄 API: URL: $baseUrl/refresh-product');
+
       final response = await http
           .post(
             Uri.parse('$baseUrl/refresh-product'),
-            headers: {'Content-Type': 'application/json'},
-            body: json.encode({'id': productId}),
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: json.encode({'id': productId.trim()}),
           )
-          .timeout(const Duration(seconds: 30));
+          .timeout(
+            const Duration(seconds: 45),
+          ); // Increased timeout for scraping
 
-      print('Refresh response status: ${response.statusCode}');
-      print('Refresh response body: ${response.body}');
+      print('🔄 API: Response status: ${response.statusCode}');
+      print(
+        '🔄 API: Response body: ${response.body.substring(0, response.body.length > 200 ? 200 : response.body.length)}',
+      );
 
-      if (response.statusCode != 200) {
-        String errorMessage = 'Unknown error occurred';
-        try {
-          final errorData = json.decode(response.body);
-          errorMessage = errorData['error'] ?? errorMessage;
-        } catch (e) {
+      if (response.statusCode == 200) {
+        print('✅ API: Successfully refreshed product: $productId');
+        return;
+      }
+
+      // Handle different error status codes
+      String errorMessage = 'Unknown error occurred';
+      try {
+        final errorData = json.decode(response.body);
+        errorMessage =
+            errorData['error'] ?? errorData['message'] ?? errorMessage;
+        print('❌ API: Error message: $errorMessage');
+      } catch (e) {
+        if (response.statusCode == 404) {
+          errorMessage = 'Product not found. It may have been deleted.';
+        } else if (response.statusCode == 400) {
+          errorMessage = 'Invalid request. Please try again.';
+        } else if (response.statusCode == 500) {
+          errorMessage = 'Server error. The website may be blocking requests.';
+        } else {
           errorMessage = 'Server error: ${response.statusCode}';
         }
-        throw Exception(errorMessage);
       }
+      throw Exception(errorMessage);
+    } on http.ClientException catch (e) {
+      print('❌ API: ClientException: ${e.message}');
+      throw Exception(
+        'Network error: ${e.message}\n'
+        'Make sure the backend server is running at $baseUrl',
+      );
+    } on SocketException catch (e) {
+      print('❌ API: SocketException: ${e.message}');
+      throw Exception(
+        'Cannot connect to backend server.\n'
+        'Make sure the server is running at $baseUrl\n'
+        'Run: cd backend && node index.js\n'
+        'Error: ${e.message}',
+      );
     } catch (e) {
-      if (e.toString().contains('SocketException') ||
-          e.toString().contains('Connection') ||
-          e.toString().contains('Failed host lookup')) {
-        throw Exception(
-          'Cannot connect to backend server.\n'
-          'Make sure the server is running at $baseUrl\n'
-          'Run: cd backend && node index.js',
-        );
-      }
-      if (e.toString().contains('TimeoutException')) {
+      if (e.toString().contains('TimeoutException') ||
+          e.toString().contains('Timeout')) {
+        print('❌ API: TimeoutException');
         throw Exception(
           'Request timed out. The website may be slow or unresponsive.\n'
           'Please try again.',
         );
       }
+      print('❌ API: Other error: $e');
       rethrow;
     }
   }
@@ -201,7 +237,8 @@ class ApiService {
       String errorMessage = 'Unknown error occurred';
       try {
         final errorData = json.decode(response.body);
-        errorMessage = errorData['error'] ?? errorData['message'] ?? errorMessage;
+        errorMessage =
+            errorData['error'] ?? errorData['message'] ?? errorMessage;
       } catch (e) {
         if (response.statusCode == 404) {
           errorMessage = 'Product not found. It may have already been deleted.';
@@ -225,7 +262,7 @@ class ApiService {
         'Error: ${e.message}',
       );
     } catch (e) {
-      if (e.toString().contains('TimeoutException') || 
+      if (e.toString().contains('TimeoutException') ||
           e.toString().contains('Timeout')) {
         throw Exception(
           'Request timed out. The server may be slow or unresponsive.\n'
@@ -239,13 +276,15 @@ class ApiService {
   Future<void> setThresholdPrice(String productId, double threshold) async {
     try {
       final trimmedId = productId.trim();
-      
+
       if (trimmedId.isEmpty) {
         throw Exception('Product ID cannot be empty');
       }
 
-      print('🔔 Setting threshold for product: "$trimmedId", threshold: $threshold');
-      
+      print(
+        '🔔 Setting threshold for product: "$trimmedId", threshold: $threshold',
+      );
+
       final response = await http
           .post(
             Uri.parse('$baseUrl/set-threshold'),
@@ -253,10 +292,7 @@ class ApiService {
               'Content-Type': 'application/json',
               'Accept': 'application/json',
             },
-            body: json.encode({
-              'id': trimmedId,
-              'threshold': threshold
-            }),
+            body: json.encode({'id': trimmedId, 'threshold': threshold}),
           )
           .timeout(const Duration(seconds: 15));
 
@@ -291,7 +327,7 @@ class ApiService {
         'Error: ${e.message}',
       );
     } catch (e) {
-      if (e.toString().contains('TimeoutException') || 
+      if (e.toString().contains('TimeoutException') ||
           e.toString().contains('Timeout')) {
         throw Exception(
           'Request timed out. The server may be slow or unresponsive.\n'
@@ -299,6 +335,30 @@ class ApiService {
         );
       }
       rethrow;
+    }
+  }
+
+  Future<void> registerFCMToken(String token, {String? deviceId}) async {
+    try {
+      print('Registering FCM token: ${token.substring(0, 20)}...');
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/register-fcm-token'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({'token': token, 'deviceId': deviceId}),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        print('✅ FCM token registered successfully');
+      } else {
+        print('⚠️ Failed to register FCM token: ${response.statusCode}');
+        final errorBody = response.body;
+        print('Error response: $errorBody');
+      }
+    } catch (e) {
+      print('❌ Error registering FCM token: $e');
+      // Don't throw - token registration failure shouldn't break the app
     }
   }
 

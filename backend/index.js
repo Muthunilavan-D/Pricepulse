@@ -674,7 +674,7 @@ async function scrapeProduct(url) {
     console.log('   Image:', image ? image.substring(0, 100) + '...' : 'NOT FOUND');
     console.log('   Image length:', image ? image.length : 0);
     console.log('   Is Flipkart:', isFlipkart);
-    
+
     if (isFlipkart && !image) {
       console.error('\n❌❌❌ CRITICAL: Flipkart product image not found!');
       console.error('   This might indicate the selectors need updating.');
@@ -768,6 +768,95 @@ app.post('/track-product', async (req, res) => {
   }
 
   console.log('Tracking product from URL:', url);
+  
+  // First resolve shortened URLs, then normalize for duplicate check
+  // This ensures we check against the same format that will be stored
+  const resolvedUrl = await resolveShortUrl(url);
+  const normalizedUrlForCheck = normalizeUrl(resolvedUrl) || resolvedUrl || url;
+  console.log('Checking for duplicates:');
+  console.log('   Original URL:', url);
+  console.log('   Resolved URL:', resolvedUrl);
+  console.log('   Normalized URL:', normalizedUrlForCheck);
+  
+  // CRITICAL: Check for duplicate products - MUST prevent duplicates
+  // Get ALL products and compare URLs properly (resolve + normalize for each)
+  let isDuplicate = false;
+  let duplicateProduct = null;
+  
+  try {
+    console.log('🔍 Starting comprehensive duplicate check...');
+    const allProducts = await db.collection('products').get();
+    console.log(`   Checking against ${allProducts.docs.length} existing products`);
+    
+    for (const doc of allProducts.docs) {
+      const productData = doc.data();
+      const existingUrl = productData.url || '';
+      
+      if (!existingUrl) continue;
+      
+      // Resolve and normalize existing URL the same way we did for the new URL
+      let normalizedExisting = existingUrl;
+      try {
+        // Try to resolve if it's a shortened URL
+        const resolvedExisting = await resolveShortUrl(existingUrl);
+        normalizedExisting = normalizeUrl(resolvedExisting) || resolvedExisting || existingUrl;
+      } catch (e) {
+        // If resolution fails, just normalize
+        normalizedExisting = normalizeUrl(existingUrl) || existingUrl;
+      }
+      
+      // Compare all possible URL variations
+      const urlVariations = [
+        normalizedUrlForCheck,
+        resolvedUrl,
+        url,
+        normalizedExisting,
+        existingUrl
+      ];
+      
+      // Check if any variation matches
+      for (const newUrlVar of [normalizedUrlForCheck, resolvedUrl, url]) {
+        for (const existingUrlVar of [normalizedExisting, existingUrl]) {
+          if (newUrlVar && existingUrlVar && newUrlVar === existingUrlVar) {
+            isDuplicate = true;
+            duplicateProduct = {
+              id: doc.id,
+              title: productData.title,
+              url: existingUrl
+            };
+            console.log('❌❌❌ DUPLICATE DETECTED!');
+            console.log('   New URL (normalized):', normalizedUrlForCheck);
+            console.log('   Existing URL:', existingUrl);
+            console.log('   Existing URL (normalized):', normalizedExisting);
+            console.log('   Match found:', newUrlVar);
+            break;
+          }
+        }
+        if (isDuplicate) break;
+      }
+      
+      if (isDuplicate) break;
+    }
+    
+    if (isDuplicate && duplicateProduct) {
+      console.log('❌ Blocking duplicate product addition');
+      return res.status(409).json({ 
+        error: 'This product is already being tracked',
+        existingProductId: duplicateProduct.id,
+        existingProductTitle: duplicateProduct.title
+      });
+    }
+    
+    console.log('✅ No duplicate found after comprehensive check');
+  } catch (checkError) {
+    console.error('❌ CRITICAL ERROR in duplicate check:', checkError);
+    console.error('Error stack:', checkError.stack);
+    // DON'T continue if check fails - return error to be safe
+    return res.status(500).json({ 
+      error: 'Error checking for duplicates. Please try again.' 
+    });
+  }
+
   const data = await scrapeProduct(url);
   
   if (!data || !data.price) {
@@ -809,9 +898,33 @@ app.post('/track-product', async (req, res) => {
     validatedThreshold = thresholdNum;
   }
 
+  // FINAL duplicate check right before saving (double safety)
+  try {
+    const finalCheck = await db.collection('products')
+      .where('url', '==', normalizedUrlForCheck)
+      .limit(1)
+      .get();
+    
+    if (!finalCheck.empty) {
+      const existing = finalCheck.docs[0].data();
+      console.log('❌❌❌ FINAL CHECK: Duplicate detected right before save!');
+      return res.status(409).json({ 
+        error: 'This product is already being tracked',
+        existingProductId: finalCheck.docs[0].id,
+        existingProductTitle: existing.title
+      });
+    }
+  } catch (finalCheckError) {
+    console.error('Error in final duplicate check:', finalCheckError);
+    // Still proceed, but log the error
+  }
+
   const now = new Date().toISOString();
+  // Store normalized URL to prevent duplicates (use the one we already calculated)
+  const finalNormalizedUrl = normalizedUrlForCheck;
+
   const product = {
-    url,
+    url: finalNormalizedUrl, // Store normalized URL to prevent duplicates
     title: data.title,
     price: data.price,
     image: data.image || '', // Ensure image is always a string
@@ -898,6 +1011,93 @@ function parsePrice(priceStr) {
   }
 }
 
+// Helper function to send FCM push notification
+async function sendFCMNotification(fcmToken, title, body, data = {}) {
+  try {
+    if (!fcmToken) {
+      console.log('⚠️ No FCM token provided, skipping notification');
+      return false;
+    }
+
+    const message = {
+      notification: {
+        title: title,
+        body: body,
+      },
+      data: {
+        ...data,
+        click_action: 'FLUTTER_NOTIFICATION_CLICK',
+      },
+      token: fcmToken,
+      android: {
+        priority: 'high',
+        notification: {
+          channelId: 'price_alerts',
+          sound: 'default',
+          priority: 'high',
+        },
+      },
+      apns: {
+        payload: {
+          aps: {
+            sound: 'default',
+            badge: 1,
+          },
+        },
+      },
+    };
+
+    const response = await admin.messaging().send(message);
+    console.log(`✅ FCM notification sent successfully: ${response}`);
+    return true;
+  } catch (error) {
+    console.error(`❌ Error sending FCM notification: ${error.message}`);
+    // If token is invalid, remove it from database
+    if (error.code === 'messaging/invalid-registration-token' || 
+        error.code === 'messaging/registration-token-not-registered') {
+      console.log(`🗑️ Removing invalid FCM token from database`);
+      try {
+        const tokensSnapshot = await db.collection('fcm_tokens')
+          .where('token', '==', fcmToken)
+          .get();
+        tokensSnapshot.forEach(async (doc) => {
+          await doc.ref.delete();
+        });
+      } catch (deleteError) {
+        console.error(`Error deleting invalid token: ${deleteError.message}`);
+      }
+    }
+    return false;
+  }
+}
+
+// Helper function to send notifications to all registered FCM tokens
+async function sendNotificationToAllUsers(title, body, data = {}) {
+  try {
+    const tokensSnapshot = await db.collection('fcm_tokens').get();
+    if (tokensSnapshot.empty) {
+      console.log('⚠️ No FCM tokens found in database');
+      return;
+    }
+
+    console.log(`📤 Sending notification to ${tokensSnapshot.size} device(s)`);
+    const sendPromises = [];
+    
+    tokensSnapshot.forEach((doc) => {
+      const tokenData = doc.data();
+      if (tokenData.token) {
+        sendPromises.push(sendFCMNotification(tokenData.token, title, body, data));
+      }
+    });
+
+    const results = await Promise.allSettled(sendPromises);
+    const successCount = results.filter(r => r.status === 'fulfilled' && r.value === true).length;
+    console.log(`✅ Sent notifications to ${successCount}/${tokensSnapshot.size} devices`);
+  } catch (error) {
+    console.error(`❌ Error sending notifications to all users: ${error.message}`);
+  }
+}
+
 // Helper function to check threshold and price drops, set notification flags
 async function checkThresholdAndNotify(docId, product, newPrice, previousPrice) {
   const thresholdPrice = product.thresholdPrice;
@@ -923,6 +1123,19 @@ async function checkThresholdAndNotify(docId, product, newPrice, previousPrice) 
         notificationType = 'threshold_reached';
         notificationMessage = `🎯 Price Alert! ${product.title} dropped to ${newPrice} (Threshold: ₹${thresholdNum.toFixed(0)})`;
         console.log(`🔔 THRESHOLD REACHED for ${product.title}: ${newPrice} <= ₹${thresholdNum}`);
+        
+        // Send FCM push notification
+        await sendNotificationToAllUsers(
+          '🎯 Price Alert!',
+          `${product.title} dropped to ${newPrice} (Threshold: ₹${thresholdNum.toFixed(0)})`,
+          {
+            type: 'threshold_reached',
+            productId: docId,
+            productTitle: product.title,
+            currentPrice: newPrice,
+            thresholdPrice: thresholdNum.toString(),
+          }
+        );
       } else if (isThresholdReached) {
         // Threshold was already reached, just update flag
         thresholdReached = true;
@@ -938,6 +1151,19 @@ async function checkThresholdAndNotify(docId, product, newPrice, previousPrice) 
         notificationType = 'price_drop';
         notificationMessage = `📉 Price Drop! ${product.title} dropped from ${previousPrice} to ${newPrice}`;
         console.log(`📉 PRICE DROP for ${product.title}: ${previousPrice} → ${newPrice}`);
+        
+        // Send FCM push notification
+        await sendNotificationToAllUsers(
+          '📉 Price Drop!',
+          `${product.title} dropped from ${previousPrice} to ${newPrice}`,
+          {
+            type: 'price_drop',
+            productId: docId,
+            productTitle: product.title,
+            currentPrice: newPrice,
+            previousPrice: previousPrice,
+          }
+        );
       }
     }
   }
@@ -1267,6 +1493,115 @@ app.post('/remove-threshold', async (req, res) => {
   }
 });
 
+// Background job endpoint for cron-job.org
+// This endpoint checks all products and updates prices
+// Optimized to respond quickly and process in background
+app.get('/background-check', async (req, res) => {
+  try {
+    // Verify API key for security
+    const apiKey = req.query.apiKey || req.headers['x-api-key'];
+    const validApiKey = '2IcwKctWD2JzIqbPxHhcDN68fxDcxXpCLFLdUQKYbf0=';
+    
+    if (apiKey !== validApiKey) {
+      console.log('❌ Unauthorized background check attempt');
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    console.log('\n🔄 Starting background price check...');
+    const startTime = Date.now();
+    
+    // Get products count first
+    const snapshot = await db.collection('products').get();
+    const totalProducts = snapshot.size;
+    console.log(`📦 Found ${totalProducts} product(s) to check`);
+
+    if (totalProducts === 0) {
+      return res.json({ 
+        message: 'No products to check',
+        checked: 0,
+        updated: 0,
+        failed: 0,
+        duration: 0
+      });
+    }
+
+    // Respond immediately to avoid timeout, then process in background
+    res.json({ 
+      message: 'Background check started',
+      checked: totalProducts,
+      status: 'processing',
+      startedAt: new Date().toISOString()
+    });
+
+    // Process products in background (don't await - let it run async)
+    (async () => {
+      let updated = 0;
+      let failed = 0;
+      const errors = [];
+
+      try {
+        // Process products with reduced delay (200ms instead of 500ms)
+        for (let i = 0; i < snapshot.docs.length; i++) {
+          const doc = snapshot.docs[i];
+          const product = doc.data();
+          
+          try {
+            console.log(`\n[${i + 1}/${totalProducts}] Checking: ${product.title?.substring(0, 50)}...`);
+            
+            // Scrape product with timeout
+            const newData = await Promise.race([
+              scrapeProduct(product.url),
+              new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Scrape timeout')), 15000)
+              )
+            ]);
+            
+            if (newData && newData.price) {
+              // Update product price (this will also check for notifications)
+              await updateProductPrice(
+                doc.id, 
+                newData.price, 
+                product.priceHistory || [], 
+                product
+              );
+              updated++;
+              console.log(`✅ Updated: ${product.title?.substring(0, 50)} - ${newData.price}`);
+            } else {
+              failed++;
+              errors.push(`${product.title}: Could not fetch price`);
+              console.log(`❌ Failed to fetch price for: ${product.title?.substring(0, 50)}`);
+            }
+            
+            // Reduced delay between requests (200ms instead of 500ms)
+            if (i < snapshot.docs.length - 1) {
+              await new Promise(resolve => setTimeout(resolve, 200));
+            }
+          } catch (error) {
+            failed++;
+            const errorMsg = `${product.title}: ${error.message}`;
+            errors.push(errorMsg);
+            console.error(`❌ Error checking ${product.title?.substring(0, 50)}: ${error.message}`);
+            // Continue with next product even if one fails
+          }
+        }
+
+        const duration = Date.now() - startTime;
+        console.log(`\n✅ Background check completed in ${(duration / 1000).toFixed(2)}s`);
+        console.log(`   Updated: ${updated}, Failed: ${failed}`);
+      } catch (error) {
+        console.error('❌ Background processing error:', error.message);
+      }
+    })();
+    
+  } catch (error) {
+    console.error('❌ Background check error:', error.message);
+    if (!res.headersSent) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+});
+
+// Legacy endpoint (kept for backward compatibility)
 app.get('/scrape-all', async (req, res) => {
   try {
     const snapshot = await db.collection('products').get();
@@ -1287,6 +1622,47 @@ app.get('/scrape-all', async (req, res) => {
   }
 });
 
+// FCM Token Registration Endpoint
+app.post('/register-fcm-token', async (req, res) => {
+  try {
+    const { token, deviceId } = req.body;
+    
+    if (!token) {
+      return res.status(400).json({ error: 'FCM token is required' });
+    }
+
+    // Check if token already exists
+    const existingToken = await db.collection('fcm_tokens')
+      .where('token', '==', token)
+      .limit(1)
+      .get();
+
+    if (!existingToken.empty) {
+      // Update existing token
+      await existingToken.docs[0].ref.update({
+        updatedAt: new Date().toISOString(),
+        deviceId: deviceId || null,
+      });
+      console.log('✅ Updated existing FCM token');
+      return res.json({ message: 'FCM token updated', token: token });
+    }
+
+    // Add new token
+    await db.collection('fcm_tokens').add({
+      token: token,
+      deviceId: deviceId || null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    console.log('✅ Registered new FCM token');
+    res.json({ message: 'FCM token registered', token: token });
+  } catch (error) {
+    console.error('Error registering FCM token:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Start server
 app.listen(PORT, '0.0.0.0', () => {
   console.log('');
@@ -1295,6 +1671,9 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('========================================');
   console.log('Local:   http://localhost:' + PORT);
   console.log('Network: http://192.168.31.248:' + PORT);
+  console.log('========================================');
+  console.log('Background Check Endpoint:');
+  console.log(`  GET /background-check?apiKey=YOUR_API_KEY`);
   console.log('========================================');
   console.log('Press Ctrl+C to stop');
   console.log('');

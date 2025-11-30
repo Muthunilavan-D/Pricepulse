@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../widgets/glassmorphism_widget.dart';
 import '../theme/app_theme.dart';
 import '../services/api_service.dart';
@@ -16,6 +17,10 @@ class ProductCard extends StatefulWidget {
   final List<dynamic> priceHistory;
   final double? thresholdPrice;
   final VoidCallback onDelete;
+  final VoidCallback? onLongPress;
+  final bool isSelectionMode;
+  final Function(Map<String, dynamic>)? onDeleteWithUndo;
+  final Function(String)? onSelectToggle;
 
   const ProductCard({
     Key? key,
@@ -28,6 +33,10 @@ class ProductCard extends StatefulWidget {
     required this.priceHistory,
     this.thresholdPrice,
     required this.onDelete,
+    this.onLongPress,
+    this.isSelectionMode = false,
+    this.onDeleteWithUndo,
+    this.onSelectToggle,
   }) : super(key: key);
 
   @override
@@ -43,7 +52,7 @@ class _ProductCardState extends State<ProductCard> {
     if (words.length <= 5) {
       return title;
     }
-    return words.take(5).join(' ') ;
+    return words.take(5).join(' ');
   }
 
   // Parse price to number for comparison
@@ -157,31 +166,31 @@ class _ProductCardState extends State<ProductCard> {
           throw Exception('Product ID is invalid or empty');
         }
 
+        // Store product data for undo before deletion
+        final productData = {
+          'id': widget.id,
+          'title': widget.title,
+          'price': widget.price,
+          'image': widget.image,
+          'url': widget.url,
+          'lastChecked': widget.lastChecked,
+          'priceHistory': widget.priceHistory,
+          'thresholdPrice': widget.thresholdPrice,
+        };
+
         print('🗑️ Deleting product: "$productId"');
         final apiService = ApiService();
         await apiService.deleteProduct(productId);
 
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Row(
-                children: [
-                  Icon(Icons.check_circle, color: Colors.white, size: 20),
-                  SizedBox(width: 8),
-                  Text('Product deleted successfully'),
-                ],
-              ),
-              backgroundColor: AppTheme.accentGreen,
-              behavior: SnackBarBehavior.floating,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.all(Radius.circular(12)),
-              ),
-              duration: Duration(seconds: 2),
-            ),
-          );
-          // Small delay to ensure backend has processed the delete
-          await Future.delayed(const Duration(milliseconds: 500));
-          widget.onDelete(); // Refresh the list
+          // Call onDeleteWithUndo if provided, otherwise use regular onDelete
+          if (widget.onDeleteWithUndo != null) {
+            widget.onDeleteWithUndo!(productData);
+          } else {
+            // Small delay to ensure backend has processed the delete
+            await Future.delayed(const Duration(milliseconds: 500));
+            widget.onDelete(); // Refresh the list
+          }
         }
       } catch (e) {
         print('❌ Delete error: $e');
@@ -255,160 +264,266 @@ class _ProductCardState extends State<ProductCard> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Product Image and Info - tappable for navigation
+                // Product Image and Info - tappable for navigation or selection
                 Expanded(
-                  child: InkWell(
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => ProductDetailScreen(
-                            id: widget.id,
-                            title: widget.title,
-                            price: widget.price,
-                            image: widget.image,
-                            url: widget.url,
-                            lastChecked: widget.lastChecked,
-                            priceHistory: widget.priceHistory,
-                            thresholdPrice: widget.thresholdPrice,
-                          ),
-                        ),
-                      ).then((shouldRefresh) {
-                        if (shouldRefresh == true) {
-                          widget
-                              .onDelete(); // Refresh on return if threshold was updated
-                        }
-                      });
-                    },
-                    borderRadius: BorderRadius.circular(12),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // Product Image
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(12),
-                          child: widget.image.isNotEmpty
-                              ? Image.network(
-                                  widget.image,
-                                  width: 80,
-                                  height: 80,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (context, error, stackTrace) =>
-                                      Container(
-                                        width: 80,
-                                        height: 80,
-                                        color: AppTheme.secondaryDark,
-                                        child: Icon(
-                                          Icons.image_not_supported_rounded,
-                                          color: AppTheme.textTertiary,
-                                        ),
-                                      ),
-                                )
-                              : Container(
-                                  width: 80,
-                                  height: 80,
-                                  decoration: BoxDecoration(
-                                    color: AppTheme.secondaryDark,
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: Icon(
-                                    Icons.shopping_bag_rounded,
-                                    color: AppTheme.textTertiary,
-                                    size: 40,
+                  child: GestureDetector(
+                    onLongPress: widget.isSelectionMode
+                        ? null
+                        : widget.onLongPress,
+                    onTap:
+                        widget.isSelectionMode && widget.onSelectToggle != null
+                        ? () {
+                            widget.onSelectToggle!(widget.id);
+                          }
+                        : null,
+                    child: InkWell(
+                      onTap: widget.isSelectionMode
+                          ? null
+                          : () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => ProductDetailScreen(
+                                    id: widget.id,
+                                    title: widget.title,
+                                    price: widget.price,
+                                    image: widget.image,
+                                    url: widget.url,
+                                    lastChecked: widget.lastChecked,
+                                    priceHistory: widget.priceHistory,
+                                    thresholdPrice: widget.thresholdPrice,
                                   ),
                                 ),
-                        ),
-                        const SizedBox(width: 16),
-                        // Product Info
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                _getShortTitle(widget.title),
-                                style: Theme.of(context).textTheme.titleMedium,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              const SizedBox(height: 8),
-                              Wrap(
-                                spacing: 8,
-                                crossAxisAlignment: WrapCrossAlignment.center,
-                                children: [
-                                  Text(
-                                    PriceFormatter.formatPrice(widget.price),
-                                    style: TextStyle(
-                                      color: AppTheme.accentGreen,
-                                      fontSize: 20,
-                                      fontWeight: FontWeight.bold,
-                                      letterSpacing: 0.5,
+                              ).then((shouldRefresh) {
+                                if (shouldRefresh == true) {
+                                  widget
+                                      .onDelete(); // Refresh on return if threshold was updated
+                                }
+                              });
+                            },
+                      splashColor: Colors.transparent,
+                      highlightColor: Colors.transparent,
+                      borderRadius: BorderRadius.circular(12),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Product Image
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(12),
+                            child: widget.image.isNotEmpty
+                                ? Image.network(
+                                    widget.image,
+                                    width: 80,
+                                    height: 80,
+                                    fit: BoxFit.cover,
+                                    errorBuilder:
+                                        (
+                                          context,
+                                          error,
+                                          stackTrace,
+                                        ) => Container(
+                                          width: 80,
+                                          height: 80,
+                                          color: AppTheme.secondaryDark,
+                                          child: Icon(
+                                            Icons.image_not_supported_rounded,
+                                            color: AppTheme.textTertiary,
+                                          ),
+                                        ),
+                                  )
+                                : Container(
+                                    width: 80,
+                                    height: 80,
+                                    decoration: BoxDecoration(
+                                      color: AppTheme.secondaryDark,
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Icon(
+                                      Icons.shopping_bag_rounded,
+                                      color: AppTheme.textTertiary,
+                                      size: 40,
                                     ),
                                   ),
-                                  _getPriceChangeIndicator(),
+                          ),
+                          const SizedBox(width: 16),
+                          // Product Info
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _getShortTitle(widget.title),
+                                  style: Theme.of(
+                                    context,
+                                  ).textTheme.titleMedium,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                const SizedBox(height: 8),
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      PriceFormatter.formatPrice(widget.price),
+                                      style: TextStyle(
+                                        color: AppTheme.accentGreen,
+                                        fontSize: 20,
+                                        fontWeight: FontWeight.bold,
+                                        letterSpacing: 0.5,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    _getPriceChangeIndicator(),
+                                  ],
+                                ),
+                                // Show threshold indicator if set
+                                if (widget.thresholdPrice != null) ...[
+                                  const SizedBox(height: 4),
+                                  Row(
+                                    children: [
+                                      Icon(
+                                        Icons.notifications_active_rounded,
+                                        size: 14,
+                                        color: AppTheme.accentBlue,
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        'Alert: ${PriceFormatter.formatNumber(widget.thresholdPrice!)}',
+                                        style: TextStyle(
+                                          color: AppTheme.accentBlue,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ],
-                              ),
-                              // Show threshold indicator if set
-                              if (widget.thresholdPrice != null) ...[
                                 const SizedBox(height: 4),
                                 Row(
                                   children: [
                                     Icon(
-                                      Icons.notifications_active_rounded,
-                                      size: 14,
-                                      color: AppTheme.accentBlue,
+                                      Icons.access_time_rounded,
+                                      size: 12,
+                                      color: AppTheme.textTertiary,
                                     ),
                                     const SizedBox(width: 4),
                                     Text(
-                                      'Alert: ${PriceFormatter.formatNumber(widget.thresholdPrice!)}',
-                                      style: TextStyle(
-                                        color: AppTheme.accentBlue,
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w500,
-                                      ),
+                                      _formatDate(widget.lastChecked),
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.bodySmall,
                                     ),
                                   ],
                                 ),
                               ],
-                              const SizedBox(height: 4),
-                              Row(
-                                children: [
-                                  Icon(
-                                    Icons.access_time_rounded,
-                                    size: 12,
-                                    color: AppTheme.textTertiary,
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    _formatDate(widget.lastChecked),
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.bodySmall,
-                                  ),
-                                ],
-                              ),
-                            ],
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ),
-                // Delete button - not tappable for navigation
-                IconButton(
-                  icon: Icon(
-                    Icons.delete_outline_rounded,
-                    color: AppTheme.accentRed,
-                  ),
-                  onPressed: () {
-                    _deleteProduct();
-                  },
-                  tooltip: 'Delete',
+                // Action buttons column - moved below to make space for product name
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Delete button - moved a little below
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: IconButton(
+                        icon: Icon(
+                          Icons.delete_outline_rounded,
+                          color: AppTheme.accentRed,
+                        ),
+                        onPressed: widget.isSelectionMode
+                            ? null
+                            : () {
+                                _deleteProduct();
+                              },
+                        tooltip: 'Delete',
+                      ),
+                    ),
+                    // Visit Product button - below delete
+                    IconButton(
+                      icon: Icon(
+                        Icons.open_in_new_rounded,
+                        color: AppTheme.accentBlue,
+                      ),
+                      onPressed: widget.isSelectionMode
+                          ? null
+                          : () async {
+                              try {
+                                String urlToLaunch = widget.url.trim();
+
+                                // Ensure URL has protocol
+                                if (!urlToLaunch.startsWith('http://') &&
+                                    !urlToLaunch.startsWith('https://')) {
+                                  urlToLaunch = 'https://$urlToLaunch';
+                                }
+
+                                // Ensure Flipkart URLs are properly formatted
+                                if (urlToLaunch.contains('flipkart.com')) {
+                                  // Replace any flipkart.com with www.flipkart.com (unless it's dl.flipkart.com)
+                                  if (!urlToLaunch.contains(
+                                        'www.flipkart.com',
+                                      ) &&
+                                      !urlToLaunch.contains(
+                                        'dl.flipkart.com',
+                                      ) &&
+                                      !urlToLaunch.contains('m.flipkart.com')) {
+                                    urlToLaunch = urlToLaunch.replaceAll(
+                                      'flipkart.com',
+                                      'www.flipkart.com',
+                                    );
+                                  }
+                                }
+
+                                print('Launching URL: $urlToLaunch');
+                                final uri = Uri.parse(urlToLaunch);
+
+                                // Try to launch directly - canLaunchUrl sometimes fails for valid URLs
+                                try {
+                                  await launchUrl(
+                                    uri,
+                                    mode: LaunchMode.externalApplication,
+                                  );
+                                } catch (launchError) {
+                                  // If direct launch fails, try with canLaunchUrl check
+                                  if (await canLaunchUrl(uri)) {
+                                    await launchUrl(
+                                      uri,
+                                      mode: LaunchMode.externalApplication,
+                                    );
+                                  } else {
+                                    throw Exception('URL cannot be launched');
+                                  }
+                                }
+                              } catch (e) {
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        'Could not open URL. Please check your internet connection.',
+                                      ),
+                                      backgroundColor: AppTheme.accentRed,
+                                      behavior: SnackBarBehavior.floating,
+                                      duration: const Duration(seconds: 3),
+                                    ),
+                                  );
+                                }
+                                print('Error launching URL: $e');
+                                print('Original URL: ${widget.url}');
+                              }
+                            },
+                      tooltip: 'Visit Product',
+                    ),
+                  ],
                 ),
               ],
             ),
           ),
           // Expandable details section
-          if (widget.priceHistory.isNotEmpty)
+          if (widget.priceHistory.isNotEmpty && !widget.isSelectionMode)
             InkWell(
               onTap: () {
                 setState(() {
