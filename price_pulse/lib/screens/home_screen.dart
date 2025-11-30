@@ -4,7 +4,10 @@ import '../widgets/product_card.dart';
 import '../widgets/glassmorphism_widget.dart';
 import '../theme/app_theme.dart';
 import '../services/notification_service.dart';
+import '../services/notification_storage_service.dart';
+import '../models/notification_model.dart';
 import 'add_product_screen.dart';
+import 'notifications_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({Key? key}) : super(key: key);
@@ -40,11 +43,26 @@ class _HomeScreenState extends State<HomeScreen> {
   Map<String, dynamic>? _lastDeletedProduct;
   String? _lastDeletedProductId;
 
+  // Notification state
+  final NotificationStorageService _notificationStorage =
+      NotificationStorageService();
+  int _unreadNotificationCount = 0;
+
   @override
   void initState() {
     super.initState();
     _searchController.addListener(_onSearchChanged);
     _fetchProducts();
+    _loadUnreadCount();
+  }
+
+  Future<void> _loadUnreadCount() async {
+    final count = await _notificationStorage.getUnreadCount();
+    if (mounted) {
+      setState(() {
+        _unreadNotificationCount = count;
+      });
+    }
   }
 
   @override
@@ -189,6 +207,7 @@ class _HomeScreenState extends State<HomeScreen> {
           final productId = product['id']?.toString() ?? '';
 
           bool notificationShown = false;
+          AppNotification? appNotification;
 
           if (notificationType == 'threshold_reached') {
             final thresholdPrice = product['thresholdPrice'];
@@ -196,7 +215,22 @@ class _HomeScreenState extends State<HomeScreen> {
               await notificationService.showThresholdReachedNotification(
                 productTitle: productTitle,
                 currentPrice: currentPrice,
-                thresholdPrice: (thresholdPrice as num).toDouble(),
+                thresholdPrice: thresholdPrice is num
+                    ? thresholdPrice.toDouble()
+                    : double.tryParse(thresholdPrice.toString()) ?? 0.0,
+              );
+
+              // Store in-app notification
+              appNotification = AppNotification(
+                id: '${productId}_${DateTime.now().millisecondsSinceEpoch}',
+                type: 'threshold_reached',
+                title: '🎯 Price Alert!',
+                message:
+                    '$productTitle dropped to $currentPrice (Threshold: ₹${thresholdPrice is num ? thresholdPrice.toInt() : thresholdPrice.toString()})',
+                productId: productId,
+                productTitle: productTitle,
+                timestamp: DateTime.now(),
+                isRead: false,
               );
               notificationShown = true;
             }
@@ -215,8 +249,27 @@ class _HomeScreenState extends State<HomeScreen> {
                 currentPrice: currentPrice,
                 previousPrice: previousPrice,
               );
+
+              // Store in-app notification
+              appNotification = AppNotification(
+                id: '${productId}_${DateTime.now().millisecondsSinceEpoch}',
+                type: 'price_drop',
+                title: '📉 Price Drop!',
+                message:
+                    '$productTitle price dropped from $previousPrice to $currentPrice',
+                productId: productId,
+                productTitle: productTitle,
+                timestamp: DateTime.now(),
+                isRead: false,
+              );
               notificationShown = true;
             }
+          }
+
+          // Store notification in local storage
+          if (appNotification != null) {
+            await _notificationStorage.addNotification(appNotification);
+            await _loadUnreadCount();
           }
 
           // Clear notification flag after showing to prevent duplicates
@@ -348,15 +401,21 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _handleDeleteWithUndo(Map<String, dynamic> productData) async {
+    final productId = productData['id']?.toString() ?? '';
+
+    // Delete all notifications related to this product
+    await _notificationStorage.deleteNotificationsByProductId(productId);
+    await _loadUnreadCount();
+
     // Store deleted product data for undo
     setState(() {
       _lastDeletedProduct = productData;
-      _lastDeletedProductId = productData['id']?.toString();
-    });
+      _lastDeletedProductId = productId;
 
-    // Refresh product list
-    await Future.delayed(const Duration(milliseconds: 500));
-    await _fetchProducts();
+      // Optimistic UI update - remove from list immediately
+      _products.removeWhere((p) => p['id']?.toString() == productId);
+      _applyFilters();
+    });
 
     // Show undo snackbar
     if (mounted) {
@@ -402,12 +461,10 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     try {
-      // Restore product using track-product endpoint
+      // Restore product using fast restore endpoint
       final productData = _lastDeletedProduct!;
-      final url = productData['url']?.toString() ?? '';
-      final thresholdPrice = productData['thresholdPrice'];
 
-      if (url.isEmpty) {
+      if (productData['url']?.toString().isEmpty ?? true) {
         throw Exception('Cannot restore: Product URL is missing');
       }
 
@@ -437,16 +494,19 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       );
 
-      // Restore product
-      await _apiService.trackProduct(
-        url,
-        thresholdPrice: thresholdPrice != null
-            ? (thresholdPrice as num).toDouble()
-            : null,
-      );
+      // Restore product using fast restore endpoint (no scraping)
+      final restoredProduct = await _apiService.restoreProduct(productData);
 
-      // Refresh product list
-      await _fetchProducts();
+      // Optimistic UI update - add product back immediately
+      setState(() {
+        _products.insert(0, restoredProduct);
+        _applyFilters();
+      });
+
+      // Refresh in background to ensure sync
+      _fetchProducts().catchError((e) {
+        print('Background refresh error: $e');
+      });
 
       // Clear undo data
       setState(() {
@@ -527,65 +587,50 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (confirmed != true) return;
 
+    // Optimistic UI update - remove products immediately
+    final deletedIds = Set<String>.from(_selectedProductIds);
+    final deletedCount = deletedIds.length;
+
+    // Delete all notifications related to these products
+    for (var productId in deletedIds) {
+      await _notificationStorage.deleteNotificationsByProductId(productId);
+    }
+    await _loadUnreadCount();
+
     setState(() {
-      _isRefreshing = true;
+      _products.removeWhere((p) => deletedIds.contains(p['id']?.toString()));
+      _applyFilters();
+      _selectedProductIds.clear();
+      _isSelectionMode = false;
     });
 
-    try {
-      int successCount = 0;
-      int failCount = 0;
+    // Show immediate feedback
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Deleted $deletedCount products'),
+          backgroundColor: AppTheme.accentGreen,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
 
-      for (var productId in _selectedProductIds) {
-        try {
-          await _apiService.deleteProduct(productId);
-          successCount++;
-        } catch (e) {
-          failCount++;
-          print('Failed to delete product $productId: $e');
+    // Delete in background (non-blocking)
+    for (var productId in deletedIds) {
+      _apiService.deleteProduct(productId).catchError((e) {
+        print('Failed to delete product $productId: $e');
+        // If delete fails, refresh to restore the product
+        if (mounted) {
+          _fetchProducts();
         }
-      }
-
-      // Refresh the product list
-      await _fetchProducts();
-
-      // Clear selection
-      setState(() {
-        _selectedProductIds.clear();
-        _isSelectionMode = false;
-      });
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Deleted $successCount products${failCount > 0 ? ' ($failCount failed)' : ''}',
-            ),
-            backgroundColor: failCount > 0
-                ? AppTheme.accentOrange
-                : AppTheme.accentGreen,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-            duration: const Duration(seconds: 2),
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error deleting products: ${e.toString()}'),
-            backgroundColor: AppTheme.accentRed,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
-    } finally {
-      setState(() {
-        _isRefreshing = false;
       });
     }
+
+    // Refresh product list in background to sync
+    _fetchProducts().catchError((e) {
+      print('Background refresh error: $e');
+    });
   }
 
   bool _hasActiveFilters() {
@@ -874,13 +919,60 @@ class _HomeScreenState extends State<HomeScreen> {
                   },
                   tooltip: 'Cancel Selection',
                 )
-              else
+              else ...[
+                // Notification icon with badge
+                Stack(
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.notifications_rounded),
+                      onPressed: () async {
+                        final result = await Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const NotificationsScreen(),
+                          ),
+                        );
+                        // Reload unread count when returning
+                        if (result == true || mounted) {
+                          await _loadUnreadCount();
+                        }
+                      },
+                      tooltip: 'Notifications',
+                    ),
+                    if (_unreadNotificationCount > 0)
+                      Positioned(
+                        right: 8,
+                        top: 8,
+                        child: Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: const BoxDecoration(
+                            color: AppTheme.accentRed,
+                            shape: BoxShape.circle,
+                          ),
+                          constraints: const BoxConstraints(
+                            minWidth: 16,
+                            minHeight: 16,
+                          ),
+                          child: Text(
+                            _unreadNotificationCount > 99
+                                ? '99+'
+                                : '$_unreadNotificationCount',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
                 IconButton(
                   icon: const Icon(Icons.filter_list_rounded),
                   onPressed: _showFilterDialog,
                   tooltip: 'Filter & Sort',
                 ),
-              if (!_isSelectionMode)
                 IconButton(
                   icon: _isRefreshing
                       ? const SizedBox(
@@ -897,6 +989,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   onPressed: _isRefreshing ? null : _refreshAllProducts,
                   tooltip: 'Refresh All',
                 ),
+              ],
               if (_isSelectionMode && _selectedProductIds.isNotEmpty)
                 IconButton(
                   icon: const Icon(Icons.delete_outline_rounded),
@@ -1253,8 +1346,35 @@ class _HomeScreenState extends State<HomeScreen> {
                   fullscreenDialog: true,
                 ),
               );
-              if (result == true) {
-                _fetchProducts();
+              if (result != null) {
+                // If result is product data, create notification immediately
+                if (result is Map<String, dynamic> && result['id'] != null) {
+                  final notification = AppNotification(
+                    id: '${result['id']}_${DateTime.now().millisecondsSinceEpoch}',
+                    type: 'product_added',
+                    title: '✅ Product Added',
+                    message:
+                        '${result['title'] ?? 'Product'} is now being tracked',
+                    productId: result['id']?.toString() ?? '',
+                    productTitle: result['title']?.toString(),
+                    timestamp: DateTime.now(),
+                    isRead: false,
+                  );
+                  await _notificationStorage.addNotification(notification);
+                  await _loadUnreadCount();
+
+                  // Add product to local list immediately (optimistic update)
+                  setState(() {
+                    _products.insert(0, result);
+                    _applyFilters();
+                  });
+                }
+
+                // Refresh products list in background (non-blocking, don't await)
+                // This ensures we have the latest data but doesn't block the UI
+                _fetchProducts().catchError((e) {
+                  print('Background refresh error: $e');
+                });
               }
             },
             icon: const Icon(Icons.add_rounded),

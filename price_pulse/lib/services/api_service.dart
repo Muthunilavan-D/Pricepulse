@@ -21,6 +21,31 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> getProduct(String productId) async {
+    try {
+      print('Fetching product: $productId');
+      final response = await http
+          .get(Uri.parse('$baseUrl/get-product/$productId'))
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final product = json.decode(response.body);
+        return product as Map<String, dynamic>;
+      } else {
+        throw Exception('Product not found');
+      }
+    } catch (e) {
+      if (e.toString().contains('SocketException') ||
+          e.toString().contains('Connection')) {
+        throw Exception(
+          'Cannot connect to backend server.\n'
+          'Make sure the server is running at $baseUrl',
+        );
+      }
+      rethrow;
+    }
+  }
+
   Future<List<dynamic>> getProducts() async {
     try {
       print('Fetching products from: $baseUrl/get-products');
@@ -73,7 +98,7 @@ class ApiService {
             headers: {'Content-Type': 'application/json'},
             body: json.encode(body),
           )
-          .timeout(const Duration(seconds: 30)); // Scraping can take time
+          .timeout(const Duration(seconds: 45)); // Scraping can take time
 
       print('Track product response status: ${response.statusCode}');
       print('Track product response body: ${response.body}');
@@ -359,6 +384,45 @@ class ApiService {
     } catch (e) {
       print('❌ Error registering FCM token: $e');
       // Don't throw - token registration failure shouldn't break the app
+    }
+  }
+
+  Future<Map<String, dynamic>> restoreProduct(
+    Map<String, dynamic> productData,
+  ) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/restore-product'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({'productData': productData}),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final responseData = json.decode(response.body);
+        return responseData['product'] ?? {};
+      } else {
+        String errorMessage = 'Unknown error occurred';
+        try {
+          final errorData = json.decode(response.body);
+          errorMessage = errorData['error'] ?? errorMessage;
+        } catch (e) {
+          errorMessage = 'Server error: ${response.statusCode}';
+        }
+        throw Exception(errorMessage);
+      }
+    } catch (e) {
+      if (e.toString().contains('SocketException') ||
+          e.toString().contains('Connection') ||
+          e.toString().contains('Failed host lookup')) {
+        throw Exception(
+          'Cannot connect to backend server.\n'
+          'Make sure the server is running at $baseUrl\n'
+          'Run: cd backend && node index.js',
+        );
+      }
+      rethrow;
     }
   }
 

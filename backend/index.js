@@ -788,54 +788,52 @@ app.post('/track-product', async (req, res) => {
     const allProducts = await db.collection('products').get();
     console.log(`   Checking against ${allProducts.docs.length} existing products`);
     
+    // OPTIMIZED: Only normalize existing URLs (don't resolve - they're already stored normalized)
+    // This is much faster as it avoids HTTP requests for each existing product
     for (const doc of allProducts.docs) {
       const productData = doc.data();
       const existingUrl = productData.url || '';
       
       if (!existingUrl) continue;
       
-      // Resolve and normalize existing URL the same way we did for the new URL
-      let normalizedExisting = existingUrl;
-      try {
-        // Try to resolve if it's a shortened URL
-        const resolvedExisting = await resolveShortUrl(existingUrl);
-        normalizedExisting = normalizeUrl(resolvedExisting) || resolvedExisting || existingUrl;
-      } catch (e) {
-        // If resolution fails, just normalize
-        normalizedExisting = normalizeUrl(existingUrl) || existingUrl;
+      // Just normalize existing URL (no resolution needed - stored URLs are already normalized)
+      const normalizedExisting = normalizeUrl(existingUrl) || existingUrl;
+      
+      // Quick comparison - check normalized URLs first (most common case)
+      if (normalizedUrlForCheck === normalizedExisting) {
+        isDuplicate = true;
+        duplicateProduct = {
+          id: doc.id,
+          title: productData.title,
+          url: existingUrl
+        };
+        console.log('❌ DUPLICATE DETECTED (normalized match)');
+        break;
       }
       
-      // Compare all possible URL variations
-      const urlVariations = [
-        normalizedUrlForCheck,
-        resolvedUrl,
-        url,
-        normalizedExisting,
-        existingUrl
-      ];
-      
-      // Check if any variation matches
-      for (const newUrlVar of [normalizedUrlForCheck, resolvedUrl, url]) {
-        for (const existingUrlVar of [normalizedExisting, existingUrl]) {
-          if (newUrlVar && existingUrlVar && newUrlVar === existingUrlVar) {
-            isDuplicate = true;
-            duplicateProduct = {
-              id: doc.id,
-              title: productData.title,
-              url: existingUrl
-            };
-            console.log('❌❌❌ DUPLICATE DETECTED!');
-            console.log('   New URL (normalized):', normalizedUrlForCheck);
-            console.log('   Existing URL:', existingUrl);
-            console.log('   Existing URL (normalized):', normalizedExisting);
-            console.log('   Match found:', newUrlVar);
-            break;
-          }
-        }
-        if (isDuplicate) break;
+      // Also check resolved URL against existing (for edge cases)
+      if (resolvedUrl && resolvedUrl !== url && normalizeUrl(resolvedUrl) === normalizedExisting) {
+        isDuplicate = true;
+        duplicateProduct = {
+          id: doc.id,
+          title: productData.title,
+          url: existingUrl
+        };
+        console.log('❌ DUPLICATE DETECTED (resolved match)');
+        break;
       }
       
-      if (isDuplicate) break;
+      // Final check: original URL against existing (rare case)
+      if (url === existingUrl) {
+        isDuplicate = true;
+        duplicateProduct = {
+          id: doc.id,
+          title: productData.title,
+          url: existingUrl
+        };
+        console.log('❌ DUPLICATE DETECTED (exact match)');
+        break;
+      }
     }
     
     if (isDuplicate && duplicateProduct) {
@@ -960,6 +958,37 @@ app.post('/track-product', async (req, res) => {
   } catch (error) {
     console.error('Database error:', error.message);
     res.status(500).json({ error: 'Failed to save product: ' + error.message });
+  }
+});
+
+// Get single product by ID (fast lookup)
+app.get('/get-product/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id) {
+      return res.status(400).json({ error: 'Product ID is required' });
+    }
+
+    const doc = await db.collection('products').doc(id).get();
+    
+    if (!doc.exists) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+
+    const data = doc.data();
+    const product = { 
+      id: doc.id, 
+      ...data,
+      priceHistory: data.priceHistory || [],
+      thresholdPrice: data.thresholdPrice || null,
+      thresholdReached: data.thresholdReached || false,
+      image: data.image || ''
+    };
+    
+    res.json(product);
+  } catch (error) {
+    console.error('Get product error:', error.message);
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -1618,6 +1647,58 @@ app.get('/scrape-all', async (req, res) => {
     await Promise.all(updates);
     res.json({ message: 'All products updated' });
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Restore Product Endpoint (fast restore without scraping)
+app.post('/restore-product', async (req, res) => {
+  try {
+    const { productData } = req.body;
+    
+    if (!productData || !productData.url) {
+      return res.status(400).json({ error: 'Product data is required' });
+    }
+
+    const now = new Date().toISOString();
+    const product = {
+      url: productData.url,
+      title: productData.title || 'Product',
+      price: productData.price || '₹0',
+      image: productData.image || '',
+      lastChecked: productData.lastChecked || now,
+      priceHistory: productData.priceHistory || [{
+        price: productData.price || '₹0',
+        date: productData.lastChecked || now
+      }],
+      thresholdPrice: productData.thresholdPrice || null,
+      thresholdReached: productData.thresholdReached || false,
+    };
+
+    // Check if product already exists
+    const existing = await db.collection('products')
+      .where('url', '==', productData.url)
+      .limit(1)
+      .get();
+
+    if (!existing.empty) {
+      return res.status(409).json({ 
+        error: 'Product already exists',
+        product: { id: existing.docs[0].id, ...existing.docs[0].data() }
+      });
+    }
+
+    const docRef = await db.collection('products').add(product);
+    
+    res.json({ 
+      message: 'Product restored successfully',
+      product: {
+        id: docRef.id,
+        ...product
+      }
+    });
+  } catch (error) {
+    console.error('Restore product error:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
