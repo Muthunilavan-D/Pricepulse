@@ -38,6 +38,163 @@ app.post('/test-delete', (req, res) => {
   });
 });
 
+// Test endpoint to debug URL resolution
+app.get('/test-url', async (req, res) => {
+  const { url } = req.query;
+  if (!url) {
+    return res.status(400).json({ error: 'URL parameter required' });
+  }
+  
+  try {
+    console.log(`\n🧪 Testing URL resolution for: ${url}`);
+    const resolved = await resolveShortUrl(url);
+    const normalized = normalizeUrl(resolved);
+    
+    res.json({
+      original: url,
+      resolved: resolved,
+      normalized: normalized,
+      isResolved: resolved !== url,
+      isNormalized: normalized !== resolved
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Helper function to resolve shortened URLs (amzn.in, amzn.to, dl.flipkart.com)
+async function resolveShortUrl(url) {
+  try {
+    const urlObj = new URL(url);
+    const hostname = urlObj.hostname.toLowerCase();
+    
+    // Check if it's a shortened URL (Amazon or Flipkart)
+    const isShortenedAmazon = hostname === 'amzn.in' || hostname === 'amzn.to' || hostname.includes('amzn.');
+    const isShortenedFlipkart = hostname === 'dl.flipkart.com' || hostname.includes('dl.flipkart');
+    
+    if (isShortenedAmazon || isShortenedFlipkart) {
+      const urlType = isShortenedAmazon ? 'Amazon' : 'Flipkart';
+      console.log(`🔗 Detected shortened ${urlType} URL: ${url}`);
+      
+      try {
+        // First, try HEAD request to get redirect location without downloading content
+        try {
+          const headResponse = await axios.head(url, {
+            maxRedirects: 0,
+            timeout: 10000,
+            validateStatus: (status) => status >= 200 && status < 500,
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            }
+          });
+          
+          // Check for location header
+          if (headResponse.headers.location) {
+            let resolvedUrl = headResponse.headers.location;
+            if (!resolvedUrl.startsWith('http')) {
+              resolvedUrl = isShortenedAmazon 
+                ? `https://www.amazon.in${resolvedUrl}` 
+                : `https://www.flipkart.com${resolvedUrl}`;
+            }
+            console.log(`✅ Resolved from HEAD location header: ${url} -> ${resolvedUrl}`);
+            return resolvedUrl;
+          }
+        } catch (headError) {
+          // If HEAD fails, check if it's a redirect
+          if (headError.response && headError.response.status >= 300 && headError.response.status < 400) {
+            const location = headError.response.headers.location;
+            if (location) {
+              let resolvedUrl = location;
+              if (!location.startsWith('http')) {
+                resolvedUrl = isShortenedAmazon 
+                  ? `https://www.amazon.in${location}` 
+                  : `https://www.flipkart.com${location}`;
+              }
+              console.log(`✅ Resolved from HEAD redirect: ${url} -> ${resolvedUrl}`);
+              return resolvedUrl;
+            }
+          }
+          console.log(`⚠️ HEAD request failed, trying GET: ${headError.message}`);
+        }
+        
+        // If HEAD didn't work, use GET request with maxRedirects to follow redirects
+        const response = await axios.get(url, {
+          maxRedirects: 10,
+          timeout: 20000,
+          validateStatus: (status) => status >= 200 && status < 500,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+          }
+        });
+        
+        // Get the final URL after all redirects - try multiple methods
+        let finalUrl = null;
+        
+        // Method 1: Check response.request.res.responseUrl (Node.js)
+        if (response.request?.res?.responseUrl) {
+          finalUrl = response.request.res.responseUrl;
+        }
+        // Method 2: Check response.request.responseURL (browser-like)
+        else if (response.request?.responseURL) {
+          finalUrl = response.request.responseURL;
+        }
+        // Method 3: Check response.config.url (axios config)
+        else if (response.config?.url) {
+          finalUrl = response.config.url;
+        }
+        // Method 4: Check if current URL is different from original
+        else if (response.request?.path) {
+          const currentHost = response.request.host || response.request.getHeader('host');
+          if (currentHost && currentHost !== hostname) {
+            finalUrl = `https://${currentHost}${response.request.path}`;
+          }
+        }
+        
+        // If we got a different URL, verify it's valid
+        if (finalUrl && finalUrl !== url) {
+          const isValidAmazon = isShortenedAmazon && (finalUrl.includes('amazon.in') || finalUrl.includes('amazon.com'));
+          const isValidFlipkart = isShortenedFlipkart && finalUrl.includes('flipkart.com');
+          
+          if (isValidAmazon || isValidFlipkart) {
+            console.log(`✅ Resolved shortened ${urlType} URL via GET: ${url} -> ${finalUrl}`);
+            return finalUrl;
+          } else {
+            console.log(`⚠️ Resolved URL doesn't match expected domain: ${finalUrl}`);
+          }
+        }
+        
+        // If we still don't have a valid URL, try to extract from response data
+        if (!finalUrl || finalUrl === url) {
+          const $ = cheerio.load(response.data);
+          // Look for meta refresh or canonical link
+          const canonical = $('link[rel="canonical"]').attr('href');
+          if (canonical) {
+            console.log(`✅ Found canonical URL: ${canonical}`);
+            return canonical;
+          }
+        }
+        
+        console.log(`⚠️ Could not resolve shortened URL, using original: ${url}`);
+      } catch (error) {
+        console.error(`❌ Error resolving short ${urlType} URL:`, error.message);
+        if (error.response) {
+          console.error(`   Status: ${error.response.status}`);
+          console.error(`   Headers:`, error.response.headers);
+        }
+      }
+    }
+    
+    return url;
+  } catch (e) {
+    console.error('Error in resolveShortUrl:', e.message);
+    return url; // Return original if resolution fails
+  }
+}
+
 // Helper function to normalize URL
 function normalizeUrl(url) {
   if (!url) return null;
@@ -62,9 +219,16 @@ function normalizeUrl(url) {
 // Helper function to scrape product
 async function scrapeProduct(url) {
   try {
-    // Normalize URL
-    const normalizedUrl = normalizeUrl(url);
-    console.log('Scraping:', normalizedUrl);
+    console.log(`\n🔍 Starting scrape for URL: ${url}`);
+    
+    // First, resolve shortened URLs (like dl.flipkart.com)
+    const resolvedUrl = await resolveShortUrl(url);
+    console.log(`📎 Resolved URL: ${resolvedUrl}`);
+    
+    // Then normalize URL
+    const normalizedUrl = normalizeUrl(resolvedUrl);
+    console.log(`🔧 Normalized URL: ${normalizedUrl}`);
+    console.log(`🌐 Final URL to scrape: ${normalizedUrl}`);
 
     // Enhanced headers to mimic a real browser
     const headers = {
@@ -91,10 +255,13 @@ async function scrapeProduct(url) {
     let title = null;
     let image = null;
 
-    // Check if it's an Amazon URL (including shortened amzn.in)
-    const isAmazon = normalizedUrl.includes('amazon.in') || 
-                     normalizedUrl.includes('amazon.com') || 
-                     normalizedUrl.includes('amzn.in');
+    // Check if it's an Amazon URL (all variations)
+    // Supports: amazon.in, amazon.com, amzn.in, amzn.to, m.amazon.in, m.amazon.com
+    const isAmazon = /(?:amazon\.(?:in|com)|amzn\.(?:in|to)|m\.amazon\.(?:in|com))/.test(normalizedUrl);
+    
+    // Check if it's a Flipkart URL (all variations)
+    // Supports: flipkart.com, www.flipkart.com, dl.flipkart.com, m.flipkart.com
+    const isFlipkart = /(?:flipkart\.com|dl\.flipkart\.com|m\.flipkart\.com)/.test(normalizedUrl);
     
     if (isAmazon) {
       // Try multiple Amazon price selectors (they change frequently)
@@ -152,64 +319,370 @@ async function scrapeProduct(url) {
         }
       }
 
-    } else if (normalizedUrl.includes('flipkart.com')) {
-      // Try multiple Flipkart price selectors
+    } else if (isFlipkart) {
+      console.log('🛒 Scraping Flipkart product...');
+      // Try multiple Flipkart price selectors (updated for current Flipkart structure)
       const priceSelectors = [
-        'div._30jeq3._16Jk6d',
-        '._30jeq3._16Jk6d',
-        '._30jeq3',
-        '[class*="_30jeq3"]',
-        '.dyC4hf ._30jeq3',
-        '._25b18c ._30jeq3'
+        'div._30jeq3._16Jk6d',      // Main price selector
+        '._30jeq3._16Jk6d',         // Alternative
+        '._30jeq3',                  // Fallback
+        '[class*="_30jeq3"]',       // Partial match
+        '.dyC4hf ._30jeq3',         // Container variant
+        '._25b18c ._30jeq3',        // Another container
+        'div[class*="Nx9bqj"]',     // Newer Flipkart selector
+        '._1vC4OE._2rQ-NK',        // Alternative price class
+        'span[class*="price"]',     // Generic price span
+        '.a-price-whole',           // Sometimes Flipkart uses similar classes
+        '[data-id="price"]',        // Data attribute selector
+        'span[class*="_16Jk6d"]'    // Price container class
       ];
       
       for (const selector of priceSelectors) {
         const priceText = $(selector).first().text().trim();
         if (priceText) {
           price = priceText;
+          console.log(`✅ Found Flipkart price with selector: ${selector} = ${priceText}`);
           break;
         }
       }
+      
+      // If all selectors fail, try regex fallback
+      if (!price) {
+        console.error('❌ All Flipkart price selectors failed. Trying regex fallback...');
+        const allText = $.text();
+        const priceRegex = /₹[\s]*[\d,]+/g;
+        const matches = allText.match(priceRegex);
+        if (matches && matches.length > 0) {
+          // Get the first substantial price (usually the main price)
+          price = matches[0].trim();
+          console.log(`✅ Found price using regex fallback: ${price}`);
+        }
+      }
 
-      // Try multiple title selectors
+      // Try multiple title selectors (updated for current Flipkart structure)
       const titleSelectors = [
-        'span.B_NuCI',
-        '.B_NuCI',
-        'h1[class*="B_NuCI"]',
-        '.VU-ZEz',
-        'h1 span'
+        'span.B_NuCI',           // Main title selector
+        '.B_NuCI',                // Alternative
+        'h1[class*="B_NuCI"]',   // H1 variant
+        '.VU-ZEz',                // Alternative class
+        'h1 span',                // Generic h1 span
+        'h1.yhB1nd',              // Newer selector
+        'span[class*="B_NuCI"]',  // Partial match
+        'h1[data-id]',            // Data attribute variant
+        '.product-title',         // Generic product title
+        'h1'                      // Fallback to any h1
       ];
       
+      console.log('📝 Searching for Flipkart title...');
       for (const selector of titleSelectors) {
         const titleText = $(selector).text().trim();
         if (titleText) {
           title = titleText;
+          console.log(`✅ Found Flipkart title with selector: ${selector}`);
           break;
         }
       }
 
-      // Try multiple image selectors
+      if (!title) {
+        console.error('⚠️  WARNING: Flipkart title not found!');
+      } else {
+        console.log(`✅ Title found: ${title.substring(0, 50)}...`);
+      }
+
+      console.log('\n🖼️  ========== STARTING FLIPKART IMAGE DETECTION ==========');
+      console.log('🖼️  Searching for Flipkart product image...');
+      console.log('   DEBUG: About to start image detection...');
+      console.log('   Starting image detection...');
+      console.log('   Current image value before detection:', image || 'null/undefined');
+      
+      // Method 1: Try specific Flipkart image selectors
       const imageSelectors = [
-        'img._396cs4',
-        '._396cs4',
-        '[class*="_396cs4"]',
-        '.CXW8mj img',
-        '.q6DClP img'
+        'img._396cs4',                    // Main image selector
+        'img[class*="_396cs4"]',          // Class contains _396cs4
+        '._396cs4',                       // Direct class
+        '.CXW8mj img',                    // Container variant
+        'div.CXW8mj img',                 // Container div
+        '.q6DClP img',                    // Another container
+        'div.q6DClP img',                 // Container div variant
+        'img[class*="_2r_T1I"]',          // Newer image class
+        'img._2r_T1I',                    // Direct class match
+        'div[class*="CXW8mj"] img',       // Container div with img
+        'div[class*="q6DClP"] img',       // Container div variant
+        'img[data-src]',                  // Lazy-loaded images
+        'img[data-lazy-src]',             // Lazy-loaded variant
+        'img[data-original]',             // Original image
+        'img[src*="rukminim"]',           // Flipkart CDN
+        'img[src*="img.flipkart"]',       // Flipkart image CDN
+        'img[src*="flipkart"]',           // Any Flipkart URL
+        '.product-image img',              // Generic product image
+        '#product-image img',              // ID-based selector
+        'img[alt*="product"]',            // Image with product alt
+        'img[data-id]',                   // Image with data-id
       ];
       
+      console.log(`   Trying ${imageSelectors.length} image selectors...`);
       for (const selector of imageSelectors) {
-        const imgSrc = $(selector).attr('src') || $(selector).attr('data-src');
-        if (imgSrc) {
-          image = imgSrc;
-          break;
+        try {
+          const imgElements = $(selector);
+          if (imgElements.length > 0) {
+            console.log(`   Checking selector "${selector}": found ${imgElements.length} elements`);
+            // Try all matching images, not just first
+            for (let i = 0; i < Math.min(imgElements.length, 5); i++) {
+              const imgElement = $(imgElements[i]);
+              
+              // Try multiple attributes for image source
+              const srcAttr = imgElement.attr('src');
+              const dataSrcAttr = imgElement.attr('data-src');
+              const dataLazySrcAttr = imgElement.attr('data-lazy-src');
+              const dataOriginalAttr = imgElement.attr('data-original');
+              const srcsetAttr = imgElement.attr('srcset');
+              
+              let imgSrc = srcAttr || dataSrcAttr || dataLazySrcAttr || dataOriginalAttr || (srcsetAttr ? srcsetAttr.split(' ')[0] : null);
+              
+              console.log(`   [${selector}][${i}] Image attributes: src="${srcAttr ? srcAttr.substring(0, 50) : 'null'}", data-src="${dataSrcAttr ? dataSrcAttr.substring(0, 50) : 'null'}", data-lazy-src="${dataLazySrcAttr ? dataLazySrcAttr.substring(0, 50) : 'null'}"`);
+              
+              if (imgSrc) {
+                console.log(`   [${selector}][${i}] Found imgSrc: ${imgSrc.substring(0, 100)}...`);
+                
+                // Clean up the URL
+                imgSrc = imgSrc.trim();
+                
+                // Remove query parameters that might cause issues
+                if (imgSrc.includes('?')) {
+                  imgSrc = imgSrc.split('?')[0];
+                }
+                
+                // If src is relative, make it absolute
+                if (!imgSrc.startsWith('http')) {
+                  if (imgSrc.startsWith('//')) {
+                    imgSrc = 'https:' + imgSrc;
+                  } else if (imgSrc.startsWith('/')) {
+                    imgSrc = 'https://www.flipkart.com' + imgSrc;
+                  }
+                }
+                
+                // Validate it's a real image URL (relaxed for Flipkart)
+                if (imgSrc && imgSrc.length > 10) {
+                  // Check if it's NOT a placeholder or invalid image
+                  const isInvalid = imgSrc.includes('placeholder') || 
+                                  imgSrc.includes('data:image') ||
+                                  imgSrc.includes('logo') ||
+                                  imgSrc.includes('icon') ||
+                                  imgSrc.includes('banner') ||
+                                  imgSrc.includes('sprite');
+                  
+                  // Check if it looks like a valid image URL
+                  const looksValid = imgSrc.includes('.jpg') || 
+                                   imgSrc.includes('.jpeg') || 
+                                   imgSrc.includes('.png') || 
+                                   imgSrc.includes('.webp') ||
+                                   imgSrc.includes('rukminim') ||
+                                   imgSrc.includes('img.flipkart') ||
+                                   imgSrc.includes('flipkart.com') ||
+                                   (imgSrc.startsWith('http') && imgSrc.length > 30);
+                  
+                  console.log(`   [${selector}][${i}] Validation: length=${imgSrc.length}, isInvalid=${isInvalid}, looksValid=${looksValid}`);
+                  
+                  if (!isInvalid && looksValid) {
+                    image = imgSrc;
+                    console.log(`✅✅✅ Found Flipkart image with selector: ${selector} (index ${i})`);
+                    console.log(`   Image URL: ${imgSrc.substring(0, 120)}...`);
+                    break;
+                  } else {
+                    console.log(`   ⚠️ Rejected image URL (invalid=${isInvalid}, valid=${looksValid}): ${imgSrc.substring(0, 80)}...`);
+                  }
+                } else {
+                  console.log(`   ⚠️ Image URL too short: length=${imgSrc ? imgSrc.length : 0}`);
+                }
+              } else {
+                console.log(`   [${selector}][${i}] No image source found in any attribute`);
+              }
+            }
+            if (image) break;
+          }
+        } catch (e) {
+          // Continue to next selector
         }
+      }
+      
+      // Method 2: If still no image, try to find any image in the product area
+      if (!image) {
+        console.log('⚠️  Standard selectors failed, trying container search...');
+        // Look for images in common product containers
+        const productContainers = [
+          'div[class*="CXW8mj"]',
+          'div[class*="q6DClP"]',
+          'div[class*="_2r_T1I"]',
+          'div[class*="_396cs4"]',
+          'div[class*="product"]',
+          'div[class*="image"]',
+          'div[class*="Image"]',
+          '.product-image-container',
+          '#product-image-container',
+          '[class*="product-image"]'
+        ];
+        
+        for (const containerSelector of productContainers) {
+          const containers = $(containerSelector);
+          for (let i = 0; i < Math.min(containers.length, 3); i++) {
+            const container = $(containers[i]);
+            const imgs = container.find('img');
+            
+            for (let j = 0; j < Math.min(imgs.length, 5); j++) {
+              const img = $(imgs[j]);
+              let imgSrc = img.attr('src') || 
+                          img.attr('data-src') || 
+                          img.attr('data-lazy-src') ||
+                          img.attr('data-original') ||
+                          img.attr('srcset')?.split(' ')[0];
+              
+              if (imgSrc) {
+                imgSrc = imgSrc.trim();
+                if (imgSrc.includes('?')) imgSrc = imgSrc.split('?')[0];
+                
+                if (!imgSrc.startsWith('http')) {
+                  if (imgSrc.startsWith('//')) {
+                    imgSrc = 'https:' + imgSrc;
+                  } else if (imgSrc.startsWith('/')) {
+                    imgSrc = 'https://www.flipkart.com' + imgSrc;
+                  }
+                }
+                
+                if (imgSrc && imgSrc.length > 10) {
+                  const isInvalid = imgSrc.includes('placeholder') || 
+                                  imgSrc.includes('data:image') ||
+                                  imgSrc.includes('logo') ||
+                                  imgSrc.includes('icon') ||
+                                  imgSrc.includes('banner') ||
+                                  imgSrc.includes('sprite');
+                  
+                  const looksValid = imgSrc.includes('.jpg') || 
+                                   imgSrc.includes('.jpeg') || 
+                                   imgSrc.includes('.png') || 
+                                   imgSrc.includes('.webp') || 
+                                   imgSrc.includes('rukminim') || 
+                                   imgSrc.includes('img.flipkart') || 
+                                   imgSrc.includes('flipkart.com') ||
+                                   (imgSrc.startsWith('http') && imgSrc.length > 30);
+                  
+                  if (!isInvalid && looksValid) {
+                    image = imgSrc;
+                    console.log(`✅ Found image in container: ${containerSelector} (img ${j})`);
+                    console.log(`   Image URL: ${imgSrc.substring(0, 120)}...`);
+                    break;
+                  }
+                }
+              }
+            }
+            if (image) break;
+          }
+          if (image) break;
+        }
+      }
+      
+      // Method 3: Last resort - scan ALL images on the page
+      if (!image) {
+        console.log('⚠️  Container methods failed, scanning all images on page...');
+        const allImages = $('img');
+        console.log(`   Found ${allImages.length} total images on page`);
+        
+        for (let i = 0; i < Math.min(allImages.length, 20); i++) {
+          const $img = $(allImages[i]);
+          let imgSrc = $img.attr('src') || 
+                      $img.attr('data-src') || 
+                      $img.attr('data-lazy-src') ||
+                      $img.attr('data-original') ||
+                      $img.attr('srcset')?.split(' ')[0];
+          
+          if (imgSrc) {
+            imgSrc = imgSrc.trim();
+            if (imgSrc.includes('?')) imgSrc = imgSrc.split('?')[0];
+            
+            if (!imgSrc.startsWith('http')) {
+              if (imgSrc.startsWith('//')) {
+                imgSrc = 'https:' + imgSrc;
+              } else if (imgSrc.startsWith('/')) {
+                imgSrc = 'https://www.flipkart.com' + imgSrc;
+              }
+            }
+            
+            // Check if it's a product image (not logo, icon, banner, etc.)
+            if (imgSrc && imgSrc.length > 10) {
+              const isInvalid = imgSrc.includes('placeholder') || 
+                              imgSrc.includes('data:image') ||
+                              imgSrc.includes('logo') ||
+                              imgSrc.includes('icon') ||
+                              imgSrc.includes('banner') ||
+                              imgSrc.includes('ad') ||
+                              imgSrc.includes('sprite');
+              
+              const looksValid = imgSrc.includes('.jpg') || 
+                               imgSrc.includes('.jpeg') || 
+                               imgSrc.includes('.png') || 
+                               imgSrc.includes('.webp') || 
+                               imgSrc.includes('rukminim') ||
+                               imgSrc.includes('img.flipkart') ||
+                               imgSrc.includes('flipkart.com') ||
+                               (imgSrc.startsWith('http') && imgSrc.length > 30);
+              
+              if (!isInvalid && looksValid) {
+                image = imgSrc;
+                console.log(`✅ Found image using page scan (image ${i})`);
+                console.log(`   Image URL: ${imgSrc.substring(0, 120)}...`);
+                break;
+              }
+            }
+          }
+        }
+      }
+      
+      // Method 4: Try to extract from meta tags or JSON-LD
+      if (!image) {
+        console.log('⚠️  Image scan failed, trying meta tags...');
+        // Check og:image meta tag
+        const ogImage = $('meta[property="og:image"]').attr('content');
+        if (ogImage && ogImage.length > 20 && !ogImage.includes('placeholder')) {
+          image = ogImage;
+          console.log(`✅ Found image from og:image meta tag`);
+          console.log(`   Image URL: ${ogImage.substring(0, 120)}...`);
+        } else {
+          // Try link rel="image_src"
+          const linkImage = $('link[rel="image_src"]').attr('href');
+          if (linkImage && linkImage.length > 20) {
+            image = linkImage;
+            console.log(`✅ Found image from link rel="image_src"`);
+          }
+        }
+      }
+      
+      // Final check - log image status
+      if (image) {
+        console.log(`✅✅✅ FINAL: Flipkart image found! Length: ${image.length}`);
+        console.log(`   Image URL: ${image.substring(0, 150)}...`);
+      } else {
+        console.error('❌❌❌ FINAL: No Flipkart image found after all methods!');
+        console.error('   This product will be saved WITHOUT an image.');
       }
     } else {
       console.error('Unsupported URL domain. Only Amazon and Flipkart are supported.');
       return null;
     }
 
-    console.log('Scraping result - Price:', price || 'NOT FOUND', 'Title:', title ? title.substring(0, 50) : 'NOT FOUND');
+    console.log('\n📊 SCRAPING SUMMARY:');
+    console.log('   Price:', price || 'NOT FOUND');
+    console.log('   Title:', title ? title.substring(0, 50) + '...' : 'NOT FOUND');
+    console.log('   Image:', image ? image.substring(0, 100) + '...' : 'NOT FOUND');
+    console.log('   Image length:', image ? image.length : 0);
+    console.log('   Is Flipkart:', isFlipkart);
+    
+    if (isFlipkart && !image) {
+      console.error('\n❌❌❌ CRITICAL: Flipkart product image not found!');
+      console.error('   This might indicate the selectors need updating.');
+      console.error('   URL:', normalizedUrl);
+      console.error('   Price found:', !!price);
+      console.error('   Title found:', !!title);
+      console.error('   Image variable:', image);
+    }
 
     if (!price || price.length === 0) {
       console.error('Price not found. Possible reasons:');
@@ -220,11 +693,20 @@ async function scrapeProduct(url) {
       return null;
     }
 
-    return { 
+    const result = { 
       price: price.trim(), 
       title: (title || 'Unknown Product').trim(), 
       image: (image || '').trim() 
     };
+    
+    console.log('✅ Final scraping result:', {
+      price: result.price.substring(0, 30),
+      title: result.title.substring(0, 30),
+      image: result.image ? result.image.substring(0, 80) + '...' : 'EMPTY',
+      imageLength: result.image.length
+    });
+    
+    return result;
   } catch (error) {
     console.error('Scraping error details:');
     console.error('Error message:', error.message);
@@ -270,10 +752,11 @@ app.post('/track-product', async (req, res) => {
   try {
     const urlObj = new URL(url);
     const hostname = urlObj.hostname.toLowerCase();
-    // Accept amazon.in, amazon.com, amzn.in (shortened), and flipkart.com
-    const isValidDomain = hostname.includes('amazon') || 
-                          hostname.includes('amzn.in') || 
-                          hostname.includes('flipkart');
+    
+    // Accept all Amazon variations: amazon.in, amazon.com, amzn.in, amzn.to, m.amazon.in, m.amazon.com
+    // Accept all Flipkart variations: flipkart.com, www.flipkart.com, dl.flipkart.com, m.flipkart.com
+    const isValidDomain = /(?:amazon\.(?:in|com)|amzn\.(?:in|to)|m\.amazon\.(?:in|com))/.test(hostname) ||
+                          /(?:flipkart\.com|dl\.flipkart\.com|m\.flipkart\.com)/.test(hostname);
     
     if (!isValidDomain) {
       return res.status(400).json({ 
@@ -296,6 +779,14 @@ app.post('/track-product', async (req, res) => {
              '• URL may not be a valid product page\n' +
              '• Network connection issue'
     });
+  }
+  
+  // Debug logging for image
+  console.log('📸 Image data received from scraping:');
+  console.log('   Image URL:', data.image || 'EMPTY');
+  console.log('   Image length:', data.image ? data.image.length : 0);
+  if (data.image) {
+    console.log('   Image preview:', data.image.substring(0, 100) + '...');
   }
 
   // Validate threshold if provided
@@ -323,7 +814,7 @@ app.post('/track-product', async (req, res) => {
     url,
     title: data.title,
     price: data.price,
-    image: data.image,
+    image: data.image || '', // Ensure image is always a string
     lastChecked: now,
     priceHistory: [{
       price: data.price,
@@ -333,10 +824,18 @@ app.post('/track-product', async (req, res) => {
     thresholdReached: false
   };
 
+  // Debug: Log what's being saved
+  console.log('💾 Saving product to Firestore:');
+  console.log('   Title:', product.title);
+  console.log('   Price:', product.price);
+  console.log('   Image:', product.image || 'EMPTY');
+  console.log('   Image length:', product.image ? product.image.length : 0);
+
   try {
     const docRef = await db.collection('products').add(product);
-    console.log('Product added successfully:', product.title);
-    console.log('Product document ID:', docRef.id);
+    console.log('✅ Product added successfully:', product.title);
+    console.log('   Product document ID:', docRef.id);
+    console.log('   Image saved:', product.image ? 'YES (' + product.image.length + ' chars)' : 'NO');
     // Return the product with the document ID
     res.json({ 
       message: 'Product tracked successfully', 
@@ -356,7 +855,7 @@ app.get('/get-products', async (req, res) => {
     const snapshot = await db.collection('products').get();
     const products = snapshot.docs.map(doc => {
       const data = doc.data();
-      return { 
+      const product = { 
         id: doc.id, 
         ...data,
         priceHistory: data.priceHistory || [],
@@ -365,8 +864,18 @@ app.get('/get-products', async (req, res) => {
         hasNotification: data.hasNotification || false,
         notificationType: data.notificationType || null,
         notificationMessage: data.notificationMessage || null,
-        notificationTimestamp: data.notificationTimestamp || null
+        notificationTimestamp: data.notificationTimestamp || null,
+        image: data.image || '' // Ensure image is always present
       };
+      
+      // Debug logging for Flipkart products
+      if (data.url && data.url.includes('flipkart')) {
+        console.log(`📦 Flipkart product retrieved: ${data.title?.substring(0, 30)}`);
+        console.log(`   Image: ${product.image ? product.image.substring(0, 80) + '...' : 'EMPTY'}`);
+        console.log(`   Image length: ${product.image ? product.image.length : 0}`);
+      }
+      
+      return product;
     });
     res.json(products);
   } catch (error) {
@@ -793,3 +1302,4 @@ app.listen(PORT, '0.0.0.0', () => {
 
 // Keep process alive
 setInterval(() => { }, 1000);
+
