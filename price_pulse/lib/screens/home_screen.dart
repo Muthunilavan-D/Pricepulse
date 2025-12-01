@@ -980,11 +980,6 @@ class _HomeScreenState extends State<HomeScreen> {
                       : null,
                 ),
                 _GlassAppBarIconButton(
-                  icon: Icons.filter_list_rounded,
-                  onPressed: _showFilterDialog,
-                  tooltip: 'Filter & Sort',
-                ),
-                _GlassAppBarIconButton(
                   icon: Icons.refresh_rounded,
                   onPressed: _isRefreshing ? null : _refreshAllProducts,
                   tooltip: 'Refresh All',
@@ -1090,16 +1085,41 @@ class _HomeScreenState extends State<HomeScreen> {
                                     ? AppTheme.textTertiary
                                     : AppTheme.textSecondary,
                               ),
-                              suffixIcon:
-                                  _searchQuery.isNotEmpty && !_isSelectionMode
-                                  ? IconButton(
-                                      icon: Icon(
-                                        Icons.clear_rounded,
-                                        color: AppTheme.textSecondary,
-                                      ),
-                                      onPressed: () {
-                                        _searchController.clear();
-                                      },
+                              suffixIcon: !_isSelectionMode
+                                  ? Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        if (_searchQuery.isNotEmpty)
+                                          IconButton(
+                                            icon: Icon(
+                                              Icons.clear_rounded,
+                                              color: AppTheme.textSecondary,
+                                            ),
+                                            onPressed: () {
+                                              _searchController.clear();
+                                            },
+                                            padding: EdgeInsets.zero,
+                                            constraints: const BoxConstraints(
+                                              minWidth: 40,
+                                              minHeight: 40,
+                                            ),
+                                          ),
+                                        IconButton(
+                                          icon: Icon(
+                                            Icons.filter_list_rounded,
+                                            color: _hasActiveFilters()
+                                                ? AppTheme.accentBlue
+                                                : AppTheme.textSecondary,
+                                          ),
+                                          onPressed: _showFilterDialog,
+                                          padding: EdgeInsets.zero,
+                                          constraints: const BoxConstraints(
+                                            minWidth: 40,
+                                            minHeight: 40,
+                                          ),
+                                          tooltip: 'Filter & Sort',
+                                        ),
+                                      ],
                                     )
                                   : null,
                               border: InputBorder.none,
