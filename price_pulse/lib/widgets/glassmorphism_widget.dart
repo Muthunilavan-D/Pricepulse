@@ -151,3 +151,148 @@ class GradientBackground extends StatelessWidget {
   }
 }
 
+class GlassFloatingActionButton extends StatefulWidget {
+  final VoidCallback? onPressed;
+  final IconData icon;
+  final String label;
+  final bool isExtended;
+
+  const GlassFloatingActionButton({
+    Key? key,
+    required this.onPressed,
+    required this.icon,
+    required this.label,
+    this.isExtended = true,
+  }) : super(key: key);
+
+  @override
+  State<GlassFloatingActionButton> createState() => _GlassFloatingActionButtonState();
+}
+
+class _GlassFloatingActionButtonState extends State<GlassFloatingActionButton>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _animationController;
+  late Animation<double> _scaleAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _animationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 200),
+    );
+    _scaleAnimation = Tween<double>(begin: 1.0, end: 0.95).animate(
+      CurvedAnimation(
+        parent: _animationController,
+        curve: Curves.easeInOut,
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _animationController.dispose();
+    super.dispose();
+  }
+
+  void _handleTapDown(TapDownDetails details) {
+    _animationController.forward();
+  }
+
+  void _handleTapUp(TapUpDetails details) {
+    _animationController.reverse();
+    widget.onPressed?.call();
+  }
+
+  void _handleTapCancel() {
+    _animationController.reverse();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final borderRadius = widget.isExtended ? 20.0 : 28.0;
+    
+    return ScaleTransition(
+      scale: _scaleAnimation,
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(borderRadius),
+          boxShadow: [
+            BoxShadow(
+              color: AppTheme.accentBlue.withOpacity(0.3),
+              blurRadius: 16,
+              spreadRadius: 1,
+              offset: const Offset(0, 6),
+            ),
+            BoxShadow(
+              color: Colors.black.withOpacity(0.25),
+              blurRadius: 12,
+              spreadRadius: 0,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(borderRadius),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+            child: Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    AppTheme.accentBlue.withOpacity(0.9),
+                    AppTheme.accentPurple.withOpacity(0.8),
+                  ],
+                ),
+                border: Border.all(
+                  color: Colors.white.withOpacity(0.3),
+                  width: 1.5,
+                ),
+                borderRadius: BorderRadius.circular(borderRadius),
+              ),
+              child: Material(
+                color: Colors.transparent,
+                child: GestureDetector(
+                  onTapDown: _handleTapDown,
+                  onTapUp: _handleTapUp,
+                  onTapCancel: _handleTapCancel,
+                  child: Container(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: widget.isExtended ? 20 : 16,
+                      vertical: widget.isExtended ? 14 : 16,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          widget.icon,
+                          color: AppTheme.textPrimary,
+                          size: 22,
+                        ),
+                        if (widget.isExtended) ...[
+                          const SizedBox(width: 10),
+                          Text(
+                            widget.label,
+                            style: const TextStyle(
+                              color: AppTheme.textPrimary,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+

@@ -1258,29 +1258,39 @@ app.post('/refresh-product', async (req, res) => {
   }
 
   try {
-    console.log(`Refreshing product: ${id}`);
+    console.log(`🔄 Refreshing product: ${id}`);
     const doc = await db.collection('products').doc(id).get();
     if (!doc.exists) {
-      console.error(`Product not found: ${id}`);
+      console.error(`❌ Product not found: ${id}`);
       return res.status(404).json({ error: 'Product not found' });
     }
 
     const product = doc.data();
-    console.log(`Scraping URL: ${product.url}`);
+    
+    // Scrape product (this is the slowest part)
     const newData = await scrapeProduct(product.url);
     
     if (!newData || !newData.price) {
-      console.error(`Failed to scrape price for product: ${id}`);
+      console.error(`❌ Failed to scrape price for product: ${id}`);
       return res.status(500).json({ error: 'Could not fetch product price' });
     }
 
-    console.log(`Updating price for ${id}: ${newData.price}`);
+    // Update price and history
     await updateProductPrice(id, newData.price, product.priceHistory || [], product);
     
+    // Fetch updated document to get latest priceHistory and notification flags
     const updatedDoc = await db.collection('products').doc(id).get();
-    res.json({ message: 'Product price updated', product: { id: doc.id, ...updatedDoc.data() } });
+    const updatedData = updatedDoc.data();
+    
+    // Merge with new image if available
+    if (newData.image) {
+      updatedData.image = newData.image;
+    }
+    
+    console.log(`✅ Updated product ${id}: ${newData.price}`);
+    res.json({ message: 'Product price updated', product: { id: doc.id, ...updatedData } });
   } catch (error) {
-    console.error('Refresh error:', error.message);
+    console.error('❌ Refresh error:', error.message);
     res.status(500).json({ error: error.message });
   }
 });

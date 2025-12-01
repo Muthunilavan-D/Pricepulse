@@ -160,8 +160,8 @@ class ApiService {
             body: json.encode({'id': productId.trim()}),
           )
           .timeout(
-            const Duration(seconds: 45),
-          ); // Increased timeout for scraping
+            const Duration(seconds: 30),
+          ); // Timeout for scraping (optimized)
 
       print('🔄 API: Response status: ${response.statusCode}');
       print(

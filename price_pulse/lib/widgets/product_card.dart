@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:share_plus/share_plus.dart';
 import '../widgets/glassmorphism_widget.dart';
 import '../theme/app_theme.dart';
 import '../services/api_service.dart';
@@ -433,7 +434,7 @@ class _ProductCardState extends State<ProductCard> {
                       child: IconButton(
                         icon: Icon(
                           Icons.delete_outline_rounded,
-                          color: AppTheme.accentRed,
+                          color: AppTheme.accentRed.withOpacity(0.8),
                         ),
                         onPressed: widget.isSelectionMode
                             ? null
@@ -447,7 +448,7 @@ class _ProductCardState extends State<ProductCard> {
                     IconButton(
                       icon: Icon(
                         Icons.open_in_new_rounded,
-                        color: AppTheme.accentBlue,
+                        color: AppTheme.accentBlue.withOpacity(0.8),
                       ),
                       onPressed: widget.isSelectionMode
                           ? null
@@ -516,6 +517,96 @@ class _ProductCardState extends State<ProductCard> {
                               }
                             },
                       tooltip: 'Visit Product',
+                    ),
+                    // Share Product button - below visit product
+                    IconButton(
+                      icon: Icon(
+                        Icons.share_rounded,
+                        color: AppTheme.accentPurple.withOpacity(0.8),
+                      ),
+                      onPressed: widget.isSelectionMode
+                          ? null
+                          : () async {
+                              try {
+                                String urlToShare = widget.url.trim();
+
+                                // Ensure URL has protocol
+                                if (!urlToShare.startsWith('http://') &&
+                                    !urlToShare.startsWith('https://')) {
+                                  urlToShare = 'https://$urlToShare';
+                                }
+
+                                // Ensure Flipkart URLs are properly formatted
+                                if (urlToShare.contains('flipkart.com')) {
+                                  if (!urlToShare.contains(
+                                        'www.flipkart.com',
+                                      ) &&
+                                      !urlToShare.contains('dl.flipkart.com') &&
+                                      !urlToShare.contains('m.flipkart.com')) {
+                                    urlToShare = urlToShare.replaceAll(
+                                      'flipkart.com',
+                                      'www.flipkart.com',
+                                    );
+                                  }
+                                }
+
+                                final shareText =
+                                    'Check out this product: ${widget.title}\n$urlToShare';
+
+                                print('📤 Attempting to share: $shareText');
+
+                                // Try Share.shareUri first (better for URLs), then fallback to text
+                                try {
+                                  final uri = Uri.parse(urlToShare);
+                                  await Share.shareUri(uri);
+                                  print('✅ Share successful (URI)');
+                                } catch (uriError) {
+                                  // Fallback to text sharing if URI sharing fails
+                                  print(
+                                    '⚠️ URI share failed, trying text share: $uriError',
+                                  );
+                                  try {
+                                    await Share.share(
+                                      shareText,
+                                      subject: widget.title,
+                                    );
+                                    print('✅ Share successful (text)');
+                                  } catch (textError) {
+                                    print(
+                                      '❌ Text share also failed: $textError',
+                                    );
+                                    throw textError;
+                                  }
+                                }
+
+                                // Success - no error shown (user may have cancelled, which is fine)
+                              } catch (e) {
+                                print('❌ Error sharing product: $e');
+                                print('Error type: ${e.runtimeType}');
+
+                                // Show error only for actual failures
+                                if (mounted) {
+                                  final errorStr = e.toString().toLowerCase();
+                                  // Don't show error for user cancellation
+                                  if (!errorStr.contains('cancelled') &&
+                                      !errorStr.contains('dismissed') &&
+                                      !errorStr.contains('user') &&
+                                      !errorStr.contains('platform')) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(
+                                          'Could not share product. Please try again.',
+                                        ),
+                                        backgroundColor: AppTheme.accentRed,
+                                        behavior: SnackBarBehavior.floating,
+                                        duration: const Duration(seconds: 3),
+                                      ),
+                                    );
+                                  }
+                                }
+                              }
+                            },
+                      tooltip: 'Share Product',
                     ),
                   ],
                 ),

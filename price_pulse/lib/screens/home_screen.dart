@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import '../widgets/product_card.dart';
 import '../widgets/glassmorphism_widget.dart';
+import '../widgets/glass_app_bar.dart';
 import '../theme/app_theme.dart';
+import 'dart:ui';
 import '../services/notification_service.dart';
 import '../services/notification_storage_service.dart';
 import '../models/notification_model.dart';
@@ -312,29 +314,56 @@ class _HomeScreenState extends State<HomeScreen> {
       int failCount = 0;
       List<String> errorMessages = [];
 
-      // Refresh products sequentially with a small delay to avoid overwhelming the server
-      for (var product in _products) {
-        final productId = (product['id']?.toString() ?? '').trim();
-        if (productId.isEmpty) {
-          failCount++;
-          continue;
+      // Get all product IDs
+      final productIds = _products
+          .map((p) => (p['id']?.toString() ?? '').trim())
+          .where((id) => id.isNotEmpty)
+          .toList();
+
+      if (productIds.isEmpty) {
+        setState(() {
+          _isRefreshing = false;
+        });
+        return;
+      }
+
+      // Refresh products in parallel batches (3 at a time to avoid overwhelming server)
+      const batchSize = 3;
+      for (int i = 0; i < productIds.length; i += batchSize) {
+        final batch = productIds.skip(i).take(batchSize).toList();
+
+        // Process batch in parallel
+        final results = await Future.wait(
+          batch.map((productId) async {
+            try {
+              print('🔄 Refreshing product: $productId');
+              await _apiService.refreshProductPrice(productId);
+              print('✅ Successfully refreshed product: $productId');
+              return {'success': true, 'id': productId};
+            } catch (e) {
+              final errorMsg = e.toString();
+              errorMessages.add(
+                'Product $productId: ${errorMsg.length > 50 ? errorMsg.substring(0, 50) + "..." : errorMsg}',
+              );
+              print('❌ Failed to refresh product $productId: $e');
+              return {'success': false, 'id': productId};
+            }
+          }),
+          eagerError: false, // Don't stop on first error
+        );
+
+        // Count successes and failures
+        for (var result in results) {
+          if (result['success'] == true) {
+            successCount++;
+          } else {
+            failCount++;
+          }
         }
 
-        try {
-          print('🔄 Refreshing product: $productId');
-          await _apiService.refreshProductPrice(productId);
-          successCount++;
-          print('✅ Successfully refreshed product: $productId');
-
-          // Small delay between requests to avoid overwhelming the server
-          await Future.delayed(const Duration(milliseconds: 500));
-        } catch (e) {
-          failCount++;
-          final errorMsg = e.toString();
-          errorMessages.add(
-            'Product $productId: ${errorMsg.length > 50 ? errorMsg.substring(0, 50) + "..." : errorMsg}',
-          );
-          print('❌ Failed to refresh product $productId: $e');
+        // Small delay between batches (not between individual requests)
+        if (i + batchSize < productIds.length) {
+          await Future.delayed(const Duration(milliseconds: 100));
         }
       }
 
@@ -891,26 +920,58 @@ class _HomeScreenState extends State<HomeScreen> {
         },
         child: Scaffold(
           backgroundColor: Colors.transparent,
-          extendBodyBehindAppBar: true,
-          appBar: AppBar(
+          extendBodyBehindAppBar: false,
+          appBar: GlassAppBar(
             title: Row(
               mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.trending_down, color: AppTheme.accentBlue, size: 28),
-                const SizedBox(width: 8),
-                const Text(
-                  'PricePulse',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 1.5,
+                Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        AppTheme.accentBlue.withOpacity(0.3),
+                        AppTheme.accentPurple.withOpacity(0.2),
+                      ],
+                    ),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: AppTheme.accentBlue.withOpacity(0.3),
+                      width: 1,
+                    ),
+                  ),
+                  child: Icon(
+                    Icons.trending_down_rounded,
+                    color: AppTheme.accentBlue,
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                ShaderMask(
+                  shaderCallback: (bounds) => LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [AppTheme.accentBlue, AppTheme.accentPurple],
+                  ).createShader(bounds),
+                  child: const Text(
+                    'PricePulse',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1.2,
+                      fontSize: 22,
+                      color: Colors.white,
+                    ),
                   ),
                 ),
               ],
             ),
             actions: [
               if (_isSelectionMode)
-                IconButton(
-                  icon: const Icon(Icons.close_rounded),
+                _GlassAppBarIconButton(
+                  icon: Icons.close_rounded,
                   onPressed: () {
                     setState(() {
                       _isSelectionMode = false;
@@ -921,60 +982,37 @@ class _HomeScreenState extends State<HomeScreen> {
                 )
               else ...[
                 // Notification icon with badge
-                Stack(
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.notifications_rounded),
-                      onPressed: () async {
-                        final result = await Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => const NotificationsScreen(),
-                          ),
-                        );
-                        // Reload unread count when returning
-                        if (result == true || mounted) {
-                          await _loadUnreadCount();
-                        }
-                      },
-                      tooltip: 'Notifications',
-                    ),
-                    if (_unreadNotificationCount > 0)
-                      Positioned(
-                        right: 8,
-                        top: 8,
-                        child: Container(
-                          padding: const EdgeInsets.all(4),
-                          decoration: const BoxDecoration(
-                            color: AppTheme.accentRed,
-                            shape: BoxShape.circle,
-                          ),
-                          constraints: const BoxConstraints(
-                            minWidth: 16,
-                            minHeight: 16,
-                          ),
-                          child: Text(
-                            _unreadNotificationCount > 99
-                                ? '99+'
-                                : '$_unreadNotificationCount',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                        ),
+                _GlassAppBarIconButton(
+                  icon: Icons.notifications_rounded,
+                  onPressed: () async {
+                    final result = await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const NotificationsScreen(),
                       ),
-                  ],
+                    );
+                    // Reload unread count when returning
+                    if (result == true || mounted) {
+                      await _loadUnreadCount();
+                    }
+                  },
+                  tooltip: 'Notifications',
+                  badge: _unreadNotificationCount > 0
+                      ? _unreadNotificationCount > 99
+                            ? '99+'
+                            : '$_unreadNotificationCount'
+                      : null,
                 ),
-                IconButton(
-                  icon: const Icon(Icons.filter_list_rounded),
+                _GlassAppBarIconButton(
+                  icon: Icons.filter_list_rounded,
                   onPressed: _showFilterDialog,
                   tooltip: 'Filter & Sort',
                 ),
-                IconButton(
-                  icon: _isRefreshing
+                _GlassAppBarIconButton(
+                  icon: Icons.refresh_rounded,
+                  onPressed: _isRefreshing ? null : _refreshAllProducts,
+                  tooltip: 'Refresh All',
+                  child: _isRefreshing
                       ? const SizedBox(
                           width: 20,
                           height: 20,
@@ -985,18 +1023,15 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ),
                         )
-                      : const Icon(Icons.refresh_rounded),
-                  onPressed: _isRefreshing ? null : _refreshAllProducts,
-                  tooltip: 'Refresh All',
+                      : null,
                 ),
               ],
               if (_isSelectionMode && _selectedProductIds.isNotEmpty)
-                IconButton(
-                  icon: const Icon(Icons.delete_outline_rounded),
+                _GlassAppBarIconButton(
+                  icon: Icons.delete_outline_rounded,
                   onPressed: _bulkDelete,
                   tooltip: 'Delete Selected',
                 ),
-              const SizedBox(width: 8),
             ],
           ),
           body: SafeArea(
@@ -1337,7 +1372,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     ],
                   ),
           ),
-          floatingActionButton: FloatingActionButton.extended(
+          floatingActionButton: GlassFloatingActionButton(
             onPressed: () async {
               final result = await Navigator.push(
                 context,
@@ -1377,8 +1412,117 @@ class _HomeScreenState extends State<HomeScreen> {
                 });
               }
             },
-            icon: const Icon(Icons.add_rounded),
-            label: const Text('Track Product'),
+            icon: Icons.add_rounded,
+            label: 'Track Product',
+            isExtended: true,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// Glassmorphism Icon Button for AppBar
+class _GlassAppBarIconButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback? onPressed;
+  final String? tooltip;
+  final String? badge;
+  final Widget? child;
+
+  const _GlassAppBarIconButton({
+    Key? key,
+    required this.icon,
+    this.onPressed,
+    this.tooltip,
+    this.badge,
+    this.child,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip ?? '',
+      child: Container(
+        margin: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white.withOpacity(0.15), width: 1),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.1),
+              blurRadius: 4,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: onPressed,
+                borderRadius: BorderRadius.circular(12),
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      child ??
+                          Icon(
+                            icon,
+                            color: onPressed == null
+                                ? AppTheme.textTertiary
+                                : AppTheme.textPrimary,
+                            size: 22,
+                          ),
+                      if (badge != null)
+                        Positioned(
+                          right: -4,
+                          top: -4,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 5,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [
+                                  AppTheme.accentRed,
+                                  AppTheme.accentRed.withOpacity(0.8),
+                                ],
+                              ),
+                              shape: BoxShape.circle,
+                              boxShadow: [
+                                BoxShadow(
+                                  color: AppTheme.accentRed.withOpacity(0.5),
+                                  blurRadius: 4,
+                                  spreadRadius: 1,
+                                ),
+                              ],
+                            ),
+                            constraints: const BoxConstraints(
+                              minWidth: 16,
+                              minHeight: 16,
+                            ),
+                            child: Text(
+                              badge!,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ),
         ),
       ),
