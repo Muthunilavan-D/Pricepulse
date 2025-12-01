@@ -10,6 +10,7 @@ import '../services/notification_storage_service.dart';
 import '../models/notification_model.dart';
 import 'add_product_screen.dart';
 import 'notifications_screen.dart';
+import '../widgets/glass_snackbar.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({Key? key}) : super(key: key);
@@ -176,15 +177,10 @@ class _HomeScreenState extends State<HomeScreen> {
       _applyFilters();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error: ${e.toString()}'),
-            backgroundColor: AppTheme.accentRed,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-          ),
+        GlassSnackBar.show(
+          context,
+          message: 'Error: ${e.toString()}',
+          type: SnackBarType.error,
         );
       }
     } finally {
@@ -413,13 +409,11 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error refreshing products: ${e.toString()}'),
-            backgroundColor: AppTheme.accentRed,
-            behavior: SnackBarBehavior.floating,
-            duration: const Duration(seconds: 4),
-          ),
+        GlassSnackBar.show(
+          context,
+          message: 'Error refreshing products: ${e.toString()}',
+          type: SnackBarType.error,
+          duration: const Duration(seconds: 4),
         );
       }
     } finally {
@@ -431,57 +425,59 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _handleDeleteWithUndo(Map<String, dynamic> productData) async {
     final productId = productData['id']?.toString() ?? '';
+    final isBought = productData['isBought'] == true;
 
     // Delete all notifications related to this product
-    await _notificationStorage.deleteNotificationsByProductId(productId);
+    // Note: For bought products, congratulations notification is added after this in product_card
+    if (!isBought) {
+      await _notificationStorage.deleteNotificationsByProductId(productId);
+    }
     await _loadUnreadCount();
 
-    // Store deleted product data for undo
-    setState(() {
-      _lastDeletedProduct = productData;
-      _lastDeletedProductId = productId;
+    // Store deleted product data for undo (only if not bought - no undo for bought products)
+    if (!isBought) {
+      setState(() {
+        _lastDeletedProduct = productData;
+        _lastDeletedProductId = productId;
+      });
+    }
 
-      // Optimistic UI update - remove from list immediately
+    // Optimistic UI update - remove from list immediately
+    setState(() {
       _products.removeWhere((p) => p['id']?.toString() == productId);
       _applyFilters();
     });
 
-    // Show undo snackbar
-    if (mounted) {
+    // Show undo snackbar (only for regular deletes, not bought products)
+    if (mounted && !isBought) {
       // Dismiss any existing snackbars first
       ScaffoldMessenger.of(context).clearSnackBars();
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Row(
-            children: [
-              const Icon(Icons.check_circle, color: Colors.white, size: 20),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'Product deleted: ${productData['title']?.toString().substring(0, (productData['title']?.toString().length ?? 0) > 30 ? 30 : (productData['title']?.toString().length ?? 0)) ?? 'Product'}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
-          ),
-          backgroundColor: AppTheme.accentGreen,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-          duration: const Duration(seconds: 4),
-          action: SnackBarAction(
-            label: 'UNDO',
-            textColor: Colors.white,
-            onPressed: () async {
-              await _undoDelete();
-            },
+      final productTitle = productData['title']?.toString() ?? 'Product';
+      final shortTitle = productTitle.length > 30
+          ? '${productTitle.substring(0, 30)}...'
+          : productTitle;
+
+      GlassSnackBar.show(
+        context,
+        message: 'Product deleted: $shortTitle',
+        type: SnackBarType.delete,
+        duration: const Duration(seconds: 4),
+        action: TextButton(
+          onPressed: () async {
+            await _undoDelete();
+          },
+          child: const Text(
+            'UNDO',
+            style: TextStyle(
+              color: AppTheme.textPrimary,
+              fontWeight: FontWeight.bold,
+            ),
           ),
         ),
       );
     }
+    // For bought products, the congratulations message is shown in product_card.dart
   }
 
   Future<void> _undoDelete() async {
@@ -501,25 +497,19 @@ class _HomeScreenState extends State<HomeScreen> {
       ScaffoldMessenger.of(context).clearSnackBars();
 
       // Show restoring message
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Row(
-            children: [
-              SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                ),
-              ),
-              SizedBox(width: 12),
-              Text('Restoring product...'),
-            ],
+      GlassSnackBar.show(
+        context,
+        message: 'Restoring product...',
+        type: SnackBarType.info,
+        duration: const Duration(seconds: 2),
+        icon: Icons.restore_rounded,
+        action: const SizedBox(
+          width: 20,
+          height: 20,
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            valueColor: AlwaysStoppedAnimation<Color>(AppTheme.textPrimary),
           ),
-          backgroundColor: AppTheme.accentBlue,
-          behavior: SnackBarBehavior.floating,
-          duration: Duration(seconds: 2),
         ),
       );
 
@@ -548,22 +538,11 @@ class _HomeScreenState extends State<HomeScreen> {
         ScaffoldMessenger.of(context).clearSnackBars();
 
         // Show success message
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Row(
-              children: [
-                Icon(Icons.check_circle, color: Colors.white, size: 20),
-                SizedBox(width: 8),
-                Text('Product restored successfully'),
-              ],
-            ),
-            backgroundColor: AppTheme.accentGreen,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.all(Radius.circular(12)),
-            ),
-            duration: Duration(seconds: 2),
-          ),
+        GlassSnackBar.show(
+          context,
+          message: 'Product restored successfully',
+          type: SnackBarType.success,
+          duration: const Duration(seconds: 2),
         );
       }
     } catch (e) {
@@ -576,13 +555,11 @@ class _HomeScreenState extends State<HomeScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).clearSnackBars();
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to restore: ${e.toString()}'),
-            backgroundColor: AppTheme.accentRed,
-            behavior: SnackBarBehavior.floating,
-            duration: const Duration(seconds: 3),
-          ),
+        GlassSnackBar.show(
+          context,
+          message: 'Failed to restore: ${e.toString()}',
+          type: SnackBarType.error,
+          duration: const Duration(seconds: 3),
         );
       }
     }
@@ -635,13 +612,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
     // Show immediate feedback
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Deleted $deletedCount products'),
-          backgroundColor: AppTheme.accentGreen,
-          behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 2),
-        ),
+      GlassSnackBar.show(
+        context,
+        message: 'Deleted $deletedCount products',
+        type: SnackBarType.delete,
+        duration: const Duration(seconds: 2),
       );
     }
 
@@ -921,6 +896,7 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Scaffold(
           backgroundColor: Colors.transparent,
           extendBodyBehindAppBar: false,
+          floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
           appBar: GlassAppBar(
             title: Row(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -1373,6 +1349,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
           ),
           floatingActionButton: GlassFloatingActionButton(
+            icon: Icons.add_rounded,
+            label: '',
+            isExtended: false,
             onPressed: () async {
               final result = await Navigator.push(
                 context,
@@ -1412,9 +1391,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 });
               }
             },
-            icon: Icons.add_rounded,
-            label: 'Track Product',
-            isExtended: true,
           ),
         ),
       ),

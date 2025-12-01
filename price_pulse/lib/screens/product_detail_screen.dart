@@ -6,6 +6,9 @@ import '../widgets/glassmorphism_widget.dart';
 import '../theme/app_theme.dart';
 import '../services/api_service.dart';
 import '../utils/price_formatter.dart';
+import '../services/notification_storage_service.dart';
+import '../models/notification_model.dart';
+import '../widgets/glass_snackbar.dart';
 
 class ProductDetailScreen extends StatefulWidget {
   final String id;
@@ -69,42 +72,139 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     }
   }
 
+  Future<void> _markAsBought() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppTheme.secondaryDark,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            Icon(Icons.celebration_rounded, color: AppTheme.accentGreen, size: 28),
+            const SizedBox(width: 12),
+            const Text('Mark as Bought?'),
+          ],
+        ),
+        content: Text(
+          'Congratulations! 🎉\n\nDid you purchase "${widget.title}"? This will remove it from tracking.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: AppTheme.accentGreen),
+            child: const Text('Yes, I Bought It!'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      final result = await _apiService.markProductAsBought(widget.id);
+      final productTitle = result['productTitle']?.toString() ?? widget.title;
+
+      // Delete old notifications for this product
+      final notificationStorage = NotificationStorageService();
+      await notificationStorage.deleteNotificationsByProductId(widget.id);
+
+      // Create congratulations notification
+      final notification = AppNotification(
+        id: 'bought_${widget.id}_${DateTime.now().millisecondsSinceEpoch}',
+        type: 'product_bought',
+        title: '🎉 Congratulations!',
+        message: 'You bought "$productTitle"! Great purchase!',
+        productId: widget.id,
+        productTitle: productTitle,
+        timestamp: DateTime.now(),
+        isRead: false,
+      );
+      await notificationStorage.addNotification(notification);
+
+      if (mounted) {
+        // Show congratulations message
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.celebration_rounded, color: Colors.white, size: 24),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    '🎉 Congratulations! "$productTitle" marked as bought!',
+                    style: const TextStyle(fontSize: 15),
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: AppTheme.accentGreen,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            duration: const Duration(seconds: 4),
+          ),
+        );
+
+        // Navigate back to home screen (return true to indicate product was bought)
+        Navigator.of(context).pop(true);
+      }
+    } catch (e) {
+      print('❌ Mark as bought error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: ${e.toString().replaceAll('Exception: ', '')}'),
+            backgroundColor: AppTheme.accentRed,
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
   Future<void> _setThreshold() async {
     final thresholdText = _thresholdController.text.trim();
     if (thresholdText.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Please enter a threshold price'),
-          backgroundColor: AppTheme.accentOrange,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        ),
+      GlassSnackBar.show(
+        context,
+        message: 'Please enter a threshold price',
+        type: SnackBarType.warning,
       );
       return;
     }
 
     final threshold = double.tryParse(thresholdText);
     if (threshold == null || threshold <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Please enter a valid price'),
-          backgroundColor: AppTheme.accentOrange,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        ),
+      GlassSnackBar.show(
+        context,
+        message: 'Please enter a valid price',
+        type: SnackBarType.warning,
       );
       return;
     }
 
     final currentPrice = _parsePrice(widget.price);
     if (currentPrice != null && threshold >= currentPrice) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Threshold must be less than current price'),
-          backgroundColor: AppTheme.accentOrange,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        ),
+      GlassSnackBar.show(
+        context,
+        message: 'Threshold must be less than current price',
+        type: SnackBarType.warning,
       );
       return;
     }
@@ -120,19 +220,10 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
         _thresholdPrice = threshold;
       });
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Row(
-              children: [
-                Icon(Icons.check_circle, color: Colors.white),
-                SizedBox(width: 8),
-                Text('Threshold price set successfully!'),
-              ],
-            ),
-            backgroundColor: AppTheme.accentGreen,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          ),
+        GlassSnackBar.show(
+          context,
+          message: 'Threshold price set successfully!',
+          type: SnackBarType.success,
         );
         // Pop and refresh to show updated threshold
         Navigator.pop(context, true);
@@ -143,14 +234,11 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
         if (errorMsg.contains('Exception: ')) {
           errorMsg = errorMsg.substring(11);
         }
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error: $errorMsg'),
-            backgroundColor: AppTheme.accentRed,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            duration: const Duration(seconds: 4),
-          ),
+        GlassSnackBar.show(
+          context,
+          message: 'Error: $errorMsg',
+          type: SnackBarType.error,
+          duration: const Duration(seconds: 4),
         );
       }
     } finally {
@@ -174,24 +262,18 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
         _thresholdController.clear();
       });
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('Threshold removed'),
-            backgroundColor: AppTheme.accentGreen,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          ),
+        GlassSnackBar.show(
+          context,
+          message: 'Threshold removed',
+          type: SnackBarType.success,
         );
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error: ${e.toString()}'),
-            backgroundColor: AppTheme.accentRed,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          ),
+        GlassSnackBar.show(
+          context,
+          message: 'Error: ${e.toString()}',
+          type: SnackBarType.error,
         );
       }
     } finally {
@@ -521,6 +603,16 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                   ),
                 ),
                 const SizedBox(height: 16),
+                // Mark as Bought Button
+                GlassButton(
+                  text: 'Mark as Bought',
+                  icon: Icons.check_box_outlined,
+                  onPressed: _isLoading ? null : () async {
+                    await _markAsBought();
+                  },
+                  isLoading: _isLoading,
+                ),
+                const SizedBox(height: 12),
                 // Visit Product Button
                 GlassButton(
                   text: 'Visit Product on Website',
@@ -568,15 +660,11 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                         }
                       }
                     } catch (e) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: const Text(
-                            'Could not open URL. Please check your internet connection.',
-                          ),
-                          backgroundColor: AppTheme.accentRed,
-                          behavior: SnackBarBehavior.floating,
-                          duration: const Duration(seconds: 3),
-                        ),
+                      GlassSnackBar.show(
+                        context,
+                        message: 'Could not open URL. Please check your internet connection.',
+                        type: SnackBarType.error,
+                        duration: const Duration(seconds: 3),
                       );
                       print('Error launching URL: $e');
                       print('Original URL: ${widget.url}');

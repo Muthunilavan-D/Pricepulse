@@ -97,7 +97,9 @@ class GlassButton extends StatelessWidget {
                     height: 20,
                     child: CircularProgressIndicator(
                       strokeWidth: 2,
-                      valueColor: AlwaysStoppedAnimation<Color>(AppTheme.textPrimary),
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        AppTheme.textPrimary,
+                      ),
                     ),
                   )
                 else if (icon != null) ...[
@@ -126,11 +128,8 @@ class GradientBackground extends StatelessWidget {
   final Widget child;
   final List<Color>? colors;
 
-  const GradientBackground({
-    Key? key,
-    required this.child,
-    this.colors,
-  }) : super(key: key);
+  const GradientBackground({Key? key, required this.child, this.colors})
+    : super(key: key);
 
   @override
   Widget build(BuildContext context) {
@@ -139,11 +138,13 @@ class GradientBackground extends StatelessWidget {
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: colors ?? [
-            AppTheme.primaryDark,
-            AppTheme.secondaryDark,
-            const Color(0xFF0F1429),
-          ],
+          colors:
+              colors ??
+              [
+                AppTheme.primaryDark,
+                AppTheme.secondaryDark,
+                const Color(0xFF0F1429),
+              ],
         ),
       ),
       child: child,
@@ -154,19 +155,20 @@ class GradientBackground extends StatelessWidget {
 class GlassFloatingActionButton extends StatefulWidget {
   final VoidCallback? onPressed;
   final IconData icon;
-  final String label;
+  final String? label;
   final bool isExtended;
 
   const GlassFloatingActionButton({
     Key? key,
     required this.onPressed,
     required this.icon,
-    required this.label,
-    this.isExtended = true,
+    this.label,
+    this.isExtended = false,
   }) : super(key: key);
 
   @override
-  State<GlassFloatingActionButton> createState() => _GlassFloatingActionButtonState();
+  State<GlassFloatingActionButton> createState() =>
+      _GlassFloatingActionButtonState();
 }
 
 class _GlassFloatingActionButtonState extends State<GlassFloatingActionButton>
@@ -182,10 +184,7 @@ class _GlassFloatingActionButtonState extends State<GlassFloatingActionButton>
       duration: const Duration(milliseconds: 200),
     );
     _scaleAnimation = Tween<double>(begin: 1.0, end: 0.95).animate(
-      CurvedAnimation(
-        parent: _animationController,
-        curve: Curves.easeInOut,
-      ),
+      CurvedAnimation(parent: _animationController, curve: Curves.easeInOut),
     );
   }
 
@@ -210,8 +209,8 @@ class _GlassFloatingActionButtonState extends State<GlassFloatingActionButton>
 
   @override
   Widget build(BuildContext context) {
-    final borderRadius = widget.isExtended ? 20.0 : 28.0;
-    
+    final borderRadius = widget.isExtended ? 20.0 : 40.0; // Circular for simple FAB
+
     return ScaleTransition(
       scale: _scaleAnimation,
       child: Container(
@@ -243,7 +242,7 @@ class _GlassFloatingActionButtonState extends State<GlassFloatingActionButton>
                   end: Alignment.bottomRight,
                   colors: [
                     AppTheme.accentBlue.withOpacity(0.9),
-                    AppTheme.accentPurple.withOpacity(0.8),
+                    const Color(0xFF4A90E2).withOpacity(0.85), // Lighter blue
                   ],
                 ),
                 border: Border.all(
@@ -263,28 +262,32 @@ class _GlassFloatingActionButtonState extends State<GlassFloatingActionButton>
                       horizontal: widget.isExtended ? 20 : 16,
                       vertical: widget.isExtended ? 14 : 16,
                     ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          widget.icon,
-                          color: AppTheme.textPrimary,
-                          size: 22,
-                        ),
-                        if (widget.isExtended) ...[
-                          const SizedBox(width: 10),
-                          Text(
-                            widget.label,
-                            style: const TextStyle(
-                              color: AppTheme.textPrimary,
-                              fontSize: 15,
-                              fontWeight: FontWeight.w600,
-                              letterSpacing: 0.5,
-                            ),
+                    child: widget.isExtended && widget.label != null && widget.label!.isNotEmpty
+                        ? Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                widget.icon,
+                                color: AppTheme.textPrimary,
+                                size: 22,
+                              ),
+                              const SizedBox(width: 10),
+                              Text(
+                                widget.label!,
+                                style: const TextStyle(
+                                  color: AppTheme.textPrimary,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                            ],
+                          )
+                        : Icon(
+                            widget.icon,
+                            color: AppTheme.textPrimary,
+                            size: 24,
                           ),
-                        ],
-                      ],
-                    ),
                   ),
                 ),
               ),
@@ -295,4 +298,3 @@ class _GlassFloatingActionButtonState extends State<GlassFloatingActionButton>
     );
   }
 }
-

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import '../widgets/glassmorphism_widget.dart';
 import '../theme/app_theme.dart';
+import '../widgets/glass_snackbar.dart';
 
 class AddProductScreen extends StatefulWidget {
   const AddProductScreen({Key? key}) : super(key: key);
@@ -21,15 +22,10 @@ class _AddProductScreenState extends State<AddProductScreen> {
     final url = _urlController.text.trim();
 
     if (url.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Please enter a product URL'),
-          backgroundColor: AppTheme.accentOrange,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-        ),
+      GlassSnackBar.show(
+        context,
+        message: 'Please enter a product URL',
+        type: SnackBarType.warning,
       );
       return;
     }
@@ -87,26 +83,13 @@ class _AddProductScreenState extends State<AddProductScreen> {
         thresholdPrice: threshold,
       );
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
-              children: [
-                const Icon(Icons.check_circle, color: Colors.white),
-                const SizedBox(width: 8),
-                Text(
-                  threshold != null
-                      ? 'Product added with threshold ₹${threshold.toStringAsFixed(0)}!'
-                      : 'Product added successfully!',
-                ),
-              ],
-            ),
-            backgroundColor: AppTheme.accentGreen,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-            duration: const Duration(seconds: 2),
-          ),
+        GlassSnackBar.show(
+          context,
+          message: threshold != null
+              ? 'Product added with threshold ₹${threshold.toStringAsFixed(0)}!'
+              : 'Product added successfully!',
+          type: SnackBarType.success,
+          duration: const Duration(seconds: 2),
         );
         // Return product data instead of just true
         Navigator.pop(context, productData);
@@ -124,22 +107,19 @@ class _AddProductScreenState extends State<AddProductScreen> {
           errorMessage = 'This product is already being tracked.';
         }
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              errorMessage,
-              style: const TextStyle(color: Colors.white),
-            ),
-            backgroundColor: AppTheme.accentRed,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-            duration: const Duration(seconds: 5),
-            action: SnackBarAction(
-              label: 'OK',
-              textColor: Colors.white,
-              onPressed: () {},
+        GlassSnackBar.show(
+          context,
+          message: errorMessage,
+          type: SnackBarType.error,
+          duration: const Duration(seconds: 5),
+          action: TextButton(
+            onPressed: () {},
+            child: const Text(
+              'OK',
+              style: TextStyle(
+                color: AppTheme.textPrimary,
+                fontWeight: FontWeight.bold,
+              ),
             ),
           ),
         );

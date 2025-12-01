@@ -220,6 +220,45 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> markProductAsBought(String productId) async {
+    try {
+      print('Marking product as bought: $productId');
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/mark-product-bought'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: json.encode({'id': productId.trim()}),
+          )
+          .timeout(const Duration(seconds: 15));
+
+      if (response.statusCode == 200) {
+        final responseData = json.decode(response.body);
+        return responseData;
+      } else {
+        String errorMessage = 'Unknown error occurred';
+        try {
+          final errorData = json.decode(response.body);
+          errorMessage = errorData['error'] ?? errorMessage;
+        } catch (e) {
+          errorMessage = 'Server error: ${response.statusCode}';
+        }
+        throw Exception(errorMessage);
+      }
+    } catch (e) {
+      if (e.toString().contains('SocketException') ||
+          e.toString().contains('Connection')) {
+        throw Exception(
+          'Cannot connect to backend server.\n'
+          'Make sure the server is running at $baseUrl',
+        );
+      }
+      rethrow;
+    }
+  }
+
   Future<void> deleteProduct(String productId) async {
     try {
       if (productId.isEmpty || productId.trim().isEmpty) {

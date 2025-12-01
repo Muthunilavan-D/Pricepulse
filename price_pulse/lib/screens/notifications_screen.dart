@@ -4,6 +4,7 @@ import '../models/notification_model.dart';
 import '../services/notification_storage_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/glassmorphism_widget.dart';
+import '../widgets/glass_snackbar.dart';
 import 'product_detail_screen.dart';
 import '../services/api_service.dart';
 
@@ -51,13 +52,11 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     await _storageService.markAllAsRead();
     await _loadNotifications();
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('All notifications marked as read'),
-          backgroundColor: AppTheme.accentGreen,
-          behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 2),
-        ),
+      GlassSnackBar.show(
+        context,
+        message: 'All notifications marked as read',
+        type: SnackBarType.success,
+        duration: const Duration(seconds: 2),
       );
     }
   }
@@ -93,13 +92,11 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       await _storageService.clearAllNotifications();
       await _loadNotifications();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('All notifications cleared'),
-            backgroundColor: AppTheme.accentGreen,
-            behavior: SnackBarBehavior.floating,
-            duration: const Duration(seconds: 2),
-          ),
+        GlassSnackBar.show(
+          context,
+          message: 'All notifications cleared',
+          type: SnackBarType.success,
+          duration: const Duration(seconds: 2),
         );
       }
     }
@@ -130,23 +127,19 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         );
       } else {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: const Text('Product not found'),
-              backgroundColor: AppTheme.accentRed,
-              behavior: SnackBarBehavior.floating,
-            ),
+          GlassSnackBar.show(
+            context,
+            message: 'Product not found',
+            type: SnackBarType.error,
           );
         }
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error loading product: ${e.toString()}'),
-            backgroundColor: AppTheme.accentRed,
-            behavior: SnackBarBehavior.floating,
-          ),
+        GlassSnackBar.show(
+          context,
+          message: 'Error loading product: ${e.toString()}',
+          type: SnackBarType.error,
         );
       }
     }
@@ -160,6 +153,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         return Icons.trending_down_rounded;
       case 'threshold_reached':
         return Icons.notifications_active_rounded;
+      case 'product_bought':
+        return Icons.celebration_rounded;
       default:
         return Icons.notifications_rounded;
     }
@@ -173,6 +168,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         return AppTheme.accentGreen;
       case 'threshold_reached':
         return AppTheme.accentOrange;
+      case 'product_bought':
+        return AppTheme.accentGreen;
       default:
         return AppTheme.textSecondary;
     }
@@ -277,7 +274,21 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                       child: GestureDetector(
                         onTap: () async {
                           await _markAsRead(notification);
-                          await _navigateToProduct(notification.productId);
+                          // Don't navigate for bought products (they're already removed)
+                          if (notification.type != 'product_bought') {
+                            await _navigateToProduct(notification.productId);
+                          } else {
+                            // Show message for bought products
+                            if (mounted) {
+                              GlassSnackBar.show(
+                                context,
+                                message:
+                                    '🎉 You already bought "${notification.productTitle ?? 'this product'}"!',
+                                type: SnackBarType.celebration,
+                                duration: const Duration(seconds: 3),
+                              );
+                            }
+                          }
                         },
                         child: GlassContainer(
                           padding: const EdgeInsets.all(16),

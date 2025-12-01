@@ -7,6 +7,9 @@ import '../theme/app_theme.dart';
 import '../services/api_service.dart';
 import '../screens/product_detail_screen.dart';
 import '../utils/price_formatter.dart';
+import '../services/notification_storage_service.dart';
+import '../models/notification_model.dart';
+import '../widgets/glass_snackbar.dart';
 
 class ProductCard extends StatefulWidget {
   final String id;
@@ -135,6 +138,110 @@ class _ProductCardState extends State<ProductCard> {
     );
   }
 
+  Future<void> _markAsBought() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppTheme.secondaryDark,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            Icon(
+              Icons.celebration_rounded,
+              color: AppTheme.accentGreen,
+              size: 28,
+            ),
+            const SizedBox(width: 12),
+            const Text('Mark as Bought?'),
+          ],
+        ),
+        content: Text(
+          'Congratulations! 🎉\n\nDid you purchase "${widget.title}"? This will remove it from tracking.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: AppTheme.accentGreen),
+            child: const Text('Yes, I Bought It!'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      try {
+        final productId = widget.id.trim();
+        if (productId.isEmpty) {
+          throw Exception('Product ID is invalid');
+        }
+
+        print('🎉 Marking product as bought: "$productId"');
+        final apiService = ApiService();
+        final result = await apiService.markProductAsBought(productId);
+        final productTitle = result['productTitle']?.toString() ?? widget.title;
+
+        if (mounted) {
+          // Delete old notifications for this product first
+          final notificationStorage = NotificationStorageService();
+          await notificationStorage.deleteNotificationsByProductId(productId);
+
+          // Create congratulations notification
+          final notification = AppNotification(
+            id: 'bought_${productId}_${DateTime.now().millisecondsSinceEpoch}',
+            type: 'product_bought',
+            title: '🎉 Congratulations!',
+            message: 'You bought "$productTitle"! Great purchase!',
+            productId: productId,
+            productTitle: productTitle,
+            timestamp: DateTime.now(),
+            isRead: false,
+          );
+          await notificationStorage.addNotification(notification);
+
+          // Remove product from UI immediately (optimistic update)
+          // For bought products, we don't use undo - just remove and show congratulations
+          if (widget.onDeleteWithUndo != null) {
+            final productData = {
+              'id': productId,
+              'title': productTitle,
+              'url': widget.url,
+              'price': widget.price,
+              'image': widget.image,
+              'thresholdPrice': widget.thresholdPrice,
+              'isBought': true, // Mark as bought to prevent undo
+            };
+            widget.onDeleteWithUndo!(productData);
+          } else {
+            widget.onDelete();
+          }
+
+          // Show congratulations message
+          GlassSnackBar.show(
+            context,
+            message: '🎉 Congratulations! "$productTitle" marked as bought!',
+            type: SnackBarType.celebration,
+            duration: const Duration(seconds: 4),
+          );
+        }
+      } catch (e) {
+        print('❌ Mark as bought error: $e');
+        if (mounted) {
+          String errorMsg = e.toString().replaceAll('Exception: ', '');
+          GlassSnackBar.show(
+            context,
+            message: errorMsg,
+            type: SnackBarType.error,
+            duration: const Duration(seconds: 4),
+          );
+        }
+      }
+    }
+  }
+
   Future<void> _deleteProduct() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -197,33 +304,11 @@ class _ProductCardState extends State<ProductCard> {
         print('❌ Delete error: $e');
         if (mounted) {
           String errorMsg = e.toString().replaceAll('Exception: ', '');
-
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Row(
-                children: [
-                  const Icon(
-                    Icons.error_outline,
-                    color: Colors.white,
-                    size: 20,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      errorMsg,
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ],
-              ),
-              backgroundColor: AppTheme.accentRed,
-              behavior: SnackBarBehavior.floating,
-              shape: const RoundedRectangleBorder(
-                borderRadius: BorderRadius.all(Radius.circular(12)),
-              ),
-              duration: const Duration(seconds: 4),
-            ),
+          GlassSnackBar.show(
+            context,
+            message: errorMsg,
+            type: SnackBarType.error,
+            duration: const Duration(seconds: 4),
           );
         }
       }
@@ -295,10 +380,11 @@ class _ProductCardState extends State<ProductCard> {
                                     thresholdPrice: widget.thresholdPrice,
                                   ),
                                 ),
-                              ).then((shouldRefresh) {
-                                if (shouldRefresh == true) {
-                                  widget
-                                      .onDelete(); // Refresh on return if threshold was updated
+                              ).then((result) {
+                                // result can be true if product was bought or threshold was updated
+                                if (result == true) {
+                                  // Product was marked as bought or threshold updated, refresh list
+                                  widget.onDelete();
                                 }
                               });
                             },
@@ -309,42 +395,73 @@ class _ProductCardState extends State<ProductCard> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           // Product Image
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(12),
-                            child: widget.image.isNotEmpty
-                                ? Image.network(
-                                    widget.image,
-                                    width: 80,
-                                    height: 80,
-                                    fit: BoxFit.cover,
-                                    errorBuilder:
-                                        (
-                                          context,
-                                          error,
-                                          stackTrace,
-                                        ) => Container(
-                                          width: 80,
-                                          height: 80,
+                          Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(12),
+                                child: widget.image.isNotEmpty
+                                    ? Image.network(
+                                        widget.image,
+                                        width: 80,
+                                        height: 80,
+                                        fit: BoxFit.cover,
+                                        errorBuilder:
+                                            (
+                                              context,
+                                              error,
+                                              stackTrace,
+                                            ) => Container(
+                                              width: 80,
+                                              height: 80,
+                                              color: AppTheme.secondaryDark,
+                                              child: Icon(
+                                                Icons
+                                                    .image_not_supported_rounded,
+                                                color: AppTheme.textTertiary,
+                                              ),
+                                            ),
+                                      )
+                                    : Container(
+                                        width: 80,
+                                        height: 80,
+                                        decoration: BoxDecoration(
                                           color: AppTheme.secondaryDark,
-                                          child: Icon(
-                                            Icons.image_not_supported_rounded,
-                                            color: AppTheme.textTertiary,
+                                          borderRadius: BorderRadius.circular(
+                                            12,
                                           ),
                                         ),
-                                  )
-                                : Container(
-                                    width: 80,
-                                    height: 80,
-                                    decoration: BoxDecoration(
-                                      color: AppTheme.secondaryDark,
-                                      borderRadius: BorderRadius.circular(12),
+                                        child: Icon(
+                                          Icons.shopping_bag_rounded,
+                                          color: AppTheme.textTertiary,
+                                          size: 40,
+                                        ),
+                                      ),
+                              ),
+                              // Mark as Bought button - below image
+                              if (!widget.isSelectionMode)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 8),
+                                  child: IconButton(
+                                    icon: Icon(
+                                      Icons.check_box_outlined,
+                                      color: AppTheme.accentGreen.withOpacity(
+                                        0.8,
+                                      ),
+                                      size: 24,
                                     ),
-                                    child: Icon(
-                                      Icons.shopping_bag_rounded,
-                                      color: AppTheme.textTertiary,
-                                      size: 40,
+                                    onPressed: () async {
+                                      await _markAsBought();
+                                    },
+                                    tooltip: 'Mark as Bought',
+                                    padding: EdgeInsets.zero,
+                                    constraints: const BoxConstraints(
+                                      minWidth: 32,
+                                      minHeight: 32,
                                     ),
                                   ),
+                                ),
+                            ],
                           ),
                           const SizedBox(width: 16),
                           // Product Info
@@ -501,15 +618,12 @@ class _ProductCardState extends State<ProductCard> {
                                 }
                               } catch (e) {
                                 if (mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(
+                                  GlassSnackBar.show(
+                                    context,
+                                    message:
                                         'Could not open URL. Please check your internet connection.',
-                                      ),
-                                      backgroundColor: AppTheme.accentRed,
-                                      behavior: SnackBarBehavior.floating,
-                                      duration: const Duration(seconds: 3),
-                                    ),
+                                    type: SnackBarType.error,
+                                    duration: const Duration(seconds: 3),
                                   );
                                 }
                                 print('Error launching URL: $e');
@@ -592,15 +706,12 @@ class _ProductCardState extends State<ProductCard> {
                                       !errorStr.contains('dismissed') &&
                                       !errorStr.contains('user') &&
                                       !errorStr.contains('platform')) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content: Text(
+                                    GlassSnackBar.show(
+                                      context,
+                                      message:
                                           'Could not share product. Please try again.',
-                                        ),
-                                        backgroundColor: AppTheme.accentRed,
-                                        behavior: SnackBarBehavior.floating,
-                                        duration: const Duration(seconds: 3),
-                                      ),
+                                      type: SnackBarType.error,
+                                      duration: const Duration(seconds: 3),
                                     );
                                   }
                                 }
@@ -621,6 +732,8 @@ class _ProductCardState extends State<ProductCard> {
                   _showDetails = !_showDetails;
                 });
               },
+              splashColor: Colors.transparent,
+              highlightColor: Colors.transparent,
               child: Container(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 16,

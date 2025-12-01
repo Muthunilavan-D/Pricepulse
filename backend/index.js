@@ -1295,6 +1295,42 @@ app.post('/refresh-product', async (req, res) => {
   }
 });
 
+// MARK PRODUCT AS BOUGHT - Remove from tracking with congratulations
+app.post('/mark-product-bought', async (req, res) => {
+  try {
+    console.log('\n=== MARK PRODUCT AS BOUGHT ===');
+    const { id } = req.body;
+    
+    if (!id) {
+      return res.status(400).json({ error: 'Product ID is required' });
+    }
+
+    const searchId = String(id).trim();
+    const doc = await db.collection('products').doc(searchId).get();
+    
+    if (!doc.exists) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+
+    const productData = doc.data();
+    const productTitle = productData.title || 'Product';
+    
+    // Delete the product
+    await db.collection('products').doc(searchId).delete();
+    
+    console.log(`✅ Product marked as bought and removed: "${productTitle}"`);
+    
+    res.json({ 
+      message: 'Product marked as bought',
+      productTitle: productTitle,
+      removed: true
+    });
+  } catch (error) {
+    console.error('❌ Mark as bought error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // DELETE PRODUCT - Completely rewritten for reliability
 app.post('/delete-product', async (req, res) => {
   try {
