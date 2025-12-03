@@ -1,8 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
+import 'package:firebase_auth/firebase_auth.dart';
 
 class ApiService {
+  // Helper method to get current user ID
+  String? get _userId => FirebaseAuth.instance.currentUser?.uid;
   // 🔧 CONFIGURATION FOR PHYSICAL DEVICE:
   // Replace 'YOUR_COMPUTER_IP' with your actual IP address from ipconfig
   // Example: 'http://192.168.1.5:5000'
@@ -23,10 +26,15 @@ class ApiService {
 
   Future<Map<String, dynamic>> getProduct(String productId) async {
     try {
+      final userId = _userId;
+      if (userId == null) {
+        throw Exception('User not authenticated');
+      }
+
       print('Fetching product: $productId');
       final response = await http
-          .get(Uri.parse('$baseUrl/get-product/$productId'))
-          .timeout(const Duration(seconds: 10));
+          .get(Uri.parse('$baseUrl/get-product/$productId?userId=$userId'))
+          .timeout(const Duration(seconds: 25));
 
       if (response.statusCode == 200) {
         final product = json.decode(response.body);
@@ -48,10 +56,23 @@ class ApiService {
 
   Future<List<dynamic>> getProducts() async {
     try {
-      print('Fetching products from: $baseUrl/get-products');
+      final userId = _userId;
+      if (userId == null) {
+        throw Exception('User not authenticated');
+      }
+
+      print('Fetching products from: $baseUrl/get-products?userId=$userId');
       final response = await http
-          .get(Uri.parse('$baseUrl/get-products'))
-          .timeout(const Duration(seconds: 10));
+          .get(Uri.parse('$baseUrl/get-products?userId=$userId'))
+          .timeout(
+            const Duration(seconds: 30),
+            onTimeout: () {
+              throw Exception(
+                'Request timed out. The server may be slow or unreachable.\n'
+                'Please check your internet connection and ensure the backend server is running.',
+              );
+            },
+          );
 
       print('Get products response status: ${response.statusCode}');
 
@@ -70,11 +91,19 @@ class ApiService {
       }
     } catch (e) {
       if (e.toString().contains('SocketException') ||
-          e.toString().contains('Connection')) {
+          e.toString().contains('Connection') ||
+          e.toString().contains('Failed host lookup')) {
         throw Exception(
           'Cannot connect to backend server.\n'
           'Make sure the server is running at $baseUrl\n'
           'Run: cd backend && node index.js',
+        );
+      }
+      if (e.toString().contains('TimeoutException') ||
+          e.toString().contains('Timeout')) {
+        throw Exception(
+          'Request timed out. The server may be slow or unreachable.\n'
+          'Please check your internet connection and try again.',
         );
       }
       rethrow;
@@ -86,7 +115,12 @@ class ApiService {
     double? thresholdPrice,
   }) async {
     try {
-      final body = <String, dynamic>{'url': url.trim()};
+      final userId = _userId;
+      if (userId == null) {
+        throw Exception('User not authenticated');
+      }
+
+      final body = <String, dynamic>{'url': url.trim(), 'userId': userId};
       if (thresholdPrice != null) {
         body['thresholdPrice'] = thresholdPrice;
       }
@@ -150,6 +184,11 @@ class ApiService {
       print('🔄 API: Refreshing product: "$productId"');
       print('🔄 API: URL: $baseUrl/refresh-product');
 
+      final userId = _userId;
+      if (userId == null) {
+        throw Exception('User not authenticated');
+      }
+
       final response = await http
           .post(
             Uri.parse('$baseUrl/refresh-product'),
@@ -157,7 +196,7 @@ class ApiService {
               'Content-Type': 'application/json',
               'Accept': 'application/json',
             },
-            body: json.encode({'id': productId.trim()}),
+            body: json.encode({'id': productId.trim(), 'userId': userId}),
           )
           .timeout(
             const Duration(seconds: 30),
@@ -222,6 +261,11 @@ class ApiService {
 
   Future<Map<String, dynamic>> markProductAsBought(String productId) async {
     try {
+      final userId = _userId;
+      if (userId == null) {
+        throw Exception('User not authenticated');
+      }
+
       print('Marking product as bought: $productId');
       final response = await http
           .post(
@@ -230,7 +274,7 @@ class ApiService {
               'Content-Type': 'application/json',
               'Accept': 'application/json',
             },
-            body: json.encode({'id': productId.trim()}),
+            body: json.encode({'id': productId.trim(), 'userId': userId}),
           )
           .timeout(const Duration(seconds: 15));
 
@@ -270,8 +314,15 @@ class ApiService {
       print('Product ID: "$trimmedId"');
       print('Product ID length: ${trimmedId.length}');
       print('Product ID bytes: ${trimmedId.codeUnits}');
+      final userId = _userId;
+      if (userId == null) {
+        throw Exception('User not authenticated');
+      }
+
       print('URL: $baseUrl/delete-product');
-      print('Request body: ${json.encode({'id': trimmedId})}');
+      print(
+        'Request body: ${json.encode({'id': trimmedId, 'userId': userId})}',
+      );
 
       final uri = Uri.parse('$baseUrl/delete-product');
       print('Full URI: $uri');
@@ -283,7 +334,7 @@ class ApiService {
               'Content-Type': 'application/json',
               'Accept': 'application/json',
             },
-            body: json.encode({'id': trimmedId}),
+            body: json.encode({'id': trimmedId, 'userId': userId}),
           )
           .timeout(const Duration(seconds: 15));
 
@@ -340,9 +391,13 @@ class ApiService {
   Future<void> setThresholdPrice(String productId, double threshold) async {
     try {
       final trimmedId = productId.trim();
+      final userId = _userId;
 
       if (trimmedId.isEmpty) {
         throw Exception('Product ID cannot be empty');
+      }
+      if (userId == null) {
+        throw Exception('User not authenticated');
       }
 
       print(
@@ -356,7 +411,11 @@ class ApiService {
               'Content-Type': 'application/json',
               'Accept': 'application/json',
             },
-            body: json.encode({'id': trimmedId, 'threshold': threshold}),
+            body: json.encode({
+              'id': trimmedId,
+              'threshold': threshold,
+              'userId': userId,
+            }),
           )
           .timeout(const Duration(seconds: 15));
 
@@ -403,15 +462,37 @@ class ApiService {
   }
 
   Future<void> registerFCMToken(String token, {String? deviceId}) async {
+    // Only register if user is logged in
+    final userId = _userId;
+    if (userId == null) {
+      print(
+        '⚠️ Cannot register FCM token: User not logged in. Will retry after login.',
+      );
+      return;
+    }
+
     try {
       print('Registering FCM token: ${token.substring(0, 20)}...');
+      // Use shorter timeout since this should be a quick operation
       final response = await http
           .post(
             Uri.parse('$baseUrl/register-fcm-token'),
             headers: {'Content-Type': 'application/json'},
-            body: json.encode({'token': token, 'deviceId': deviceId}),
+            body: json.encode({
+              'token': token,
+              'deviceId': deviceId,
+              'userId': userId,
+            }),
           )
-          .timeout(const Duration(seconds: 10));
+          .timeout(
+            const Duration(seconds: 15),
+            onTimeout: () {
+              print(
+                '! FCM token registration timed out (backend may be unreachable)',
+              );
+              throw Exception('FCM token registration timed out');
+            },
+          );
 
       if (response.statusCode == 200) {
         print('✅ FCM token registered successfully');
@@ -421,7 +502,18 @@ class ApiService {
         print('Error response: $errorBody');
       }
     } catch (e) {
-      print('❌ Error registering FCM token: $e');
+      // Silently fail - token registration is not critical for app functionality
+      // Only log if it's not a timeout (timeouts are expected if backend is unreachable)
+      if (!e.toString().contains('TimeoutException') &&
+          !e.toString().contains('SocketException') &&
+          !e.toString().contains('Connection') &&
+          !e.toString().contains('Timeout')) {
+        print('⚠️ Error registering FCM token: $e');
+      } else {
+        print(
+          '! FCM token registration timed out (backend may be unreachable)',
+        );
+      }
       // Don't throw - token registration failure shouldn't break the app
     }
   }
@@ -430,13 +522,18 @@ class ApiService {
     Map<String, dynamic> productData,
   ) async {
     try {
+      final userId = _userId;
+      if (userId == null) {
+        throw Exception('User not authenticated');
+      }
+
       final response = await http
           .post(
             Uri.parse('$baseUrl/restore-product'),
             headers: {'Content-Type': 'application/json'},
-            body: json.encode({'productData': productData}),
+            body: json.encode({'productData': productData, 'userId': userId}),
           )
-          .timeout(const Duration(seconds: 10));
+          .timeout(const Duration(seconds: 25));
 
       if (response.statusCode == 200) {
         final responseData = json.decode(response.body);
@@ -467,13 +564,18 @@ class ApiService {
 
   Future<void> removeThresholdPrice(String productId) async {
     try {
+      final userId = _userId;
+      if (userId == null) {
+        throw Exception('User not authenticated');
+      }
+
       final response = await http
           .post(
             Uri.parse('$baseUrl/remove-threshold'),
             headers: {'Content-Type': 'application/json'},
-            body: json.encode({'id': productId}),
+            body: json.encode({'id': productId, 'userId': userId}),
           )
-          .timeout(const Duration(seconds: 10));
+          .timeout(const Duration(seconds: 25));
 
       if (response.statusCode != 200) {
         String errorMessage = 'Unknown error occurred';

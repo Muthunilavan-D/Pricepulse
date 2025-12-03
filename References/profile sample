@@ -1,0 +1,556 @@
+/*import 'package:flutter/material.dart';
+import '../widgets/glassmorphism_widget.dart';
+import '../theme/app_theme.dart';
+import '../services/auth_service.dart';
+import '../services/api_service.dart';
+import '../widgets/glass_snackbar.dart';
+import 'auth/login_screen.dart';
+
+class ProfileScreen extends StatefulWidget {
+  const ProfileScreen({Key? key}) : super(key: key);
+
+  @override
+  State<ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<ProfileScreen> {
+  final _authService = AuthService();
+  final _apiService = ApiService();
+  List<dynamic> _products = [];
+  bool _isLoading = true;
+  int _selectedAvatarIndex = 0;
+  String _username = '';
+
+  // Avatar image paths
+  final List<String> _avatarPaths = [
+    'assets/avatars/avatar.png',
+    'assets/avatars/boy.png',
+    'assets/avatars/gamer.png',
+    'assets/avatars/girl.png',
+    'assets/avatars/man (1).png',
+    'assets/avatars/man.png',
+    'assets/avatars/panda.png',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProfile();
+    _loadProducts();
+  }
+
+  Future<void> _loadProfile() async {
+    try {
+      final profile = await _authService.getUserProfile();
+      final user = _authService.currentUser;
+
+      setState(() {
+        _username =
+            profile?['username'] ??
+            user?.displayName ??
+            user?.email?.split('@')[0] ??
+            'User';
+        _selectedAvatarIndex = profile?['avatarIndex'] ?? 0;
+      });
+    } catch (e) {
+      print('Error loading profile: $e');
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _loadProducts() async {
+    try {
+      final products = await _apiService.getProducts();
+      setState(() {
+        _products = products;
+      });
+    } catch (e) {
+      print('Error loading products: $e');
+    }
+  }
+
+  Future<void> _showEditDialog() async {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final textColor = isDark ? AppTheme.textPrimary : AppTheme.textPrimaryLight;
+    final secondaryColor = isDark
+        ? AppTheme.textSecondary
+        : AppTheme.textSecondaryLight;
+
+    // Use local state variables for the dialog
+    String tempUsername = _username;
+    int tempAvatarIndex = _selectedAvatarIndex;
+
+    await showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          backgroundColor: AppTheme.secondaryDark,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          title: Text(
+            'Edit Profile',
+            style: TextStyle(color: textColor, fontWeight: FontWeight.bold),
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Username field
+                Text(
+                  'Username',
+                  style: TextStyle(
+                    color: textColor,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: TextEditingController(text: tempUsername),
+                  style: TextStyle(color: textColor),
+                  decoration: InputDecoration(
+                    hintText: 'Enter username',
+                    hintStyle: TextStyle(color: secondaryColor),
+                    filled: true,
+                    fillColor: AppTheme.primaryDark.withOpacity(0.5),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide.none,
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                  ),
+                  onChanged: (value) {
+                    tempUsername = value;
+                  },
+                ),
+                const SizedBox(height: 24),
+                // Avatar selection
+                Text(
+                  'Choose Avatar',
+                  style: TextStyle(
+                    color: textColor,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.maxFinite,
+                  child: GridView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 3,
+                          crossAxisSpacing: 16,
+                          mainAxisSpacing: 16,
+                          childAspectRatio: 1.0,
+                        ),
+                    itemCount: _avatarPaths.length,
+                    itemBuilder: (context, index) {
+                      final isSelected = tempAvatarIndex == index;
+                      return GestureDetector(
+                        onTap: () {
+                          setDialogState(() {
+                            tempAvatarIndex = index;
+                          });
+                        },
+                        child: Container(
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: isSelected
+                                  ? AppTheme.accentBlue
+                                  : Colors.transparent,
+                              width: isSelected ? 4 : 0,
+                            ),
+                            boxShadow: isSelected
+                                ? [
+                                    BoxShadow(
+                                      color: AppTheme.accentBlue.withOpacity(
+                                        0.4,
+                                      ),
+                                      blurRadius: 12,
+                                      spreadRadius: 2,
+                                    ),
+                                  ]
+                                : null,
+                          ),
+                          child: ClipOval(
+                            child: Image.asset(
+                              _avatarPaths[index],
+                              fit: BoxFit.cover,
+                              errorBuilder: (context, error, stackTrace) {
+                                return Container(
+                                  color: AppTheme.secondaryDark,
+                                  child: Icon(
+                                    Icons.person,
+                                    size: 40,
+                                    color: AppTheme.textSecondary,
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text('Cancel', style: TextStyle(color: secondaryColor)),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                // Update the actual state only when Save is pressed
+                setState(() {
+                  _username = tempUsername.trim();
+                  _selectedAvatarIndex = tempAvatarIndex;
+                });
+                await _saveProfileChanges();
+              },
+              child: Text('Save', style: TextStyle(color: AppTheme.accentBlue)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _saveProfileChanges() async {
+    try {
+      // Update username
+      if (_username.trim().isNotEmpty) {
+        await _authService.updateUserProfile(username: _username.trim());
+      }
+
+      // Update avatar
+      await _authService.updateUserProfile(avatarIndex: _selectedAvatarIndex);
+
+      // Ensure username is trimmed
+      setState(() {
+        _username = _username.trim();
+      });
+
+      if (mounted) {
+        GlassSnackBar.show(
+          context,
+          message: 'Profile updated!',
+          type: SnackBarType.success,
+          duration: const Duration(seconds: 2),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        GlassSnackBar.show(
+          context,
+          message: 'Failed to update profile: ${e.toString()}',
+          type: SnackBarType.error,
+        );
+      }
+    }
+  }
+
+  Future<void> _handleLogout() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppTheme.secondaryDark,
+        title: const Text('Logout'),
+        content: const Text('Are you sure you want to logout?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text(
+              'Logout',
+              style: TextStyle(color: AppTheme.accentRed),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      try {
+        await _authService.signOut();
+        if (mounted) {
+          Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(builder: (context) => const LoginScreen()),
+            (route) => false,
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          GlassSnackBar.show(
+            context,
+            message: 'Logout failed: ${e.toString()}',
+            type: SnackBarType.error,
+          );
+        }
+      }
+    }
+  }
+
+  int _getTotalTracked() => _products.length;
+  int _getCurrentlyTracking() =>
+      _products.length; // All products are currently tracking
+  int _getBoughtProducts() {
+    // Count products that were marked as bought (we'd need to track this)
+    // For now, return 0 as we don't have a bought products collection
+    return 0;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final textColor = isDark ? AppTheme.textPrimary : AppTheme.textPrimaryLight;
+    final secondaryColor = isDark
+        ? AppTheme.textSecondary
+        : AppTheme.textSecondaryLight;
+
+    return GradientBackground(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          leading: IconButton(
+            icon: Icon(Icons.arrow_back_rounded, color: textColor),
+            onPressed: () => Navigator.pop(context),
+          ),
+          title: Text(
+            'Profile',
+            style: TextStyle(color: textColor, fontWeight: FontWeight.bold),
+          ),
+        ),
+        body: _isLoading
+            ? const Center(
+                child: CircularProgressIndicator(color: AppTheme.accentBlue),
+              )
+            : SafeArea(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // Profile Header
+                      GlassContainer(
+                        padding: const EdgeInsets.all(24),
+                        borderRadius: 20,
+                        child: Column(
+                          children: [
+                            // Current Avatar Display
+                            GestureDetector(
+                              onTap: () => _showEditDialog(),
+                              child: Stack(
+                                children: [
+                                  Container(
+                                    width: 120,
+                                    height: 120,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      border: Border.all(
+                                        color: AppTheme.accentBlue,
+                                        width: 4,
+                                      ),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: AppTheme.accentBlue
+                                              .withOpacity(0.3),
+                                          blurRadius: 15,
+                                          spreadRadius: 2,
+                                        ),
+                                      ],
+                                    ),
+                                    child: ClipOval(
+                                      child: Image.asset(
+                                        _avatarPaths[_selectedAvatarIndex],
+                                        fit: BoxFit.cover,
+                                        errorBuilder:
+                                            (context, error, stackTrace) {
+                                              return Container(
+                                                color: AppTheme.secondaryDark,
+                                                child: Icon(
+                                                  Icons.person,
+                                                  size: 60,
+                                                  color: AppTheme.textSecondary,
+                                                ),
+                                              );
+                                            },
+                                      ),
+                                    ),
+                                  ),
+                                  Positioned(
+                                    bottom: 0,
+                                    right: 0,
+                                    child: Container(
+                                      width: 36,
+                                      height: 36,
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        color: AppTheme.accentBlue,
+                                        border: Border.all(
+                                          color: isDark
+                                              ? AppTheme.primaryDark
+                                              : Colors.white,
+                                          width: 2,
+                                        ),
+                                      ),
+                                      child: Icon(
+                                        Icons.edit_rounded,
+                                        color: Colors.white,
+                                        size: 20,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            // Username
+                            Center(
+                              child: Text(
+                                _username.toUpperCase(),
+                                style: TextStyle(
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.bold,
+                                  color: textColor,
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              _authService.currentUser?.email ?? '',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: secondaryColor,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+
+                      // Statistics
+                      GlassContainer(
+                        padding: const EdgeInsets.all(20),
+                        borderRadius: 20,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Statistics',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w600,
+                                color: textColor,
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            _buildStatItem(
+                              'Total Tracked',
+                              '${_getTotalTracked()}',
+                              Icons.inventory_2_rounded,
+                              AppTheme.accentBlue,
+                              textColor,
+                            ),
+                            const SizedBox(height: 12),
+                            _buildStatItem(
+                              'Currently Tracking',
+                              '${_getCurrentlyTracking()}',
+                              Icons.track_changes_rounded,
+                              AppTheme.accentGreen,
+                              textColor,
+                            ),
+                            const SizedBox(height: 12),
+                            _buildStatItem(
+                              'Bought Products',
+                              '${_getBoughtProducts()}',
+                              Icons.check_circle_rounded,
+                              AppTheme.accentPurple,
+                              textColor,
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+
+                      // Logout Button
+                      GlassButton(
+                        text: 'Logout',
+                        onPressed: _handleLogout,
+                        icon: Icons.logout_rounded,
+                        backgroundColor: AppTheme.accentRed,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+      ),
+    );
+  }
+
+  Widget _buildStatItem(
+    String label,
+    String value,
+    IconData icon,
+    Color iconColor,
+    Color textColor,
+  ) {
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: iconColor.withOpacity(0.2),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(icon, color: iconColor, size: 24),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 14,
+                  color: textColor.withOpacity(0.7),
+                ),
+              ),
+              Text(
+                value,
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: textColor,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+*/

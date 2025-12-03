@@ -785,12 +785,20 @@ app.post('/track-product', async (req, res) => {
   
   try {
     console.log('🔍 Starting comprehensive duplicate check...');
-    const allProducts = await db.collection('products').get();
-    console.log(`   Checking against ${allProducts.docs.length} existing products`);
     
-    // OPTIMIZED: Only normalize existing URLs (don't resolve - they're already stored normalized)
-    // This is much faster as it avoids HTTP requests for each existing product
-    for (const doc of allProducts.docs) {
+    // Get userId from request body for duplicate check
+    const userId = req.body.userId;
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' });
+    }
+
+    // OPTIMIZED: Only check duplicates for the same user (userId filter)
+    // This is much faster and ensures proper data isolation
+    const userProductsSnapshot = await db.collection('products')
+      .where('userId', '==', userId)
+      .get();
+    
+    for (const doc of userProductsSnapshot.docs) {
       const productData = doc.data();
       const existingUrl = productData.url || '';
       
@@ -896,10 +904,11 @@ app.post('/track-product', async (req, res) => {
     validatedThreshold = thresholdNum;
   }
 
-  // FINAL duplicate check right before saving (double safety)
+  // FINAL duplicate check right before saving (double safety) - check per user
   try {
     const finalCheck = await db.collection('products')
       .where('url', '==', normalizedUrlForCheck)
+      .where('userId', '==', userId)
       .limit(1)
       .get();
     
@@ -921,6 +930,12 @@ app.post('/track-product', async (req, res) => {
   // Store normalized URL to prevent duplicates (use the one we already calculated)
   const finalNormalizedUrl = normalizedUrlForCheck;
 
+  // Get userId from request body
+  const userId = req.body.userId;
+  if (!userId) {
+    return res.status(400).json({ error: 'User ID is required' });
+  }
+
   const product = {
     url: finalNormalizedUrl, // Store normalized URL to prevent duplicates
     title: data.title,
@@ -932,7 +947,8 @@ app.post('/track-product', async (req, res) => {
       date: now
     }],
     thresholdPrice: validatedThreshold,
-    thresholdReached: false
+    thresholdReached: false,
+    userId: userId // ✅ Store userId with product for filtering
   };
 
   // Debug: Log what's being saved
@@ -965,8 +981,14 @@ app.post('/track-product', async (req, res) => {
 app.get('/get-product/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    const userId = req.query.userId;
+    
     if (!id) {
       return res.status(400).json({ error: 'Product ID is required' });
+    }
+
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' });
     }
 
     const doc = await db.collection('products').doc(id).get();
@@ -976,6 +998,12 @@ app.get('/get-product/:id', async (req, res) => {
     }
 
     const data = doc.data();
+    
+    // Verify product belongs to requesting user
+    if (data.userId !== userId) {
+      return res.status(403).json({ error: 'Access denied. Product does not belong to this user.' });
+    }
+
     const product = { 
       id: doc.id, 
       ...data,
@@ -994,7 +1022,19 @@ app.get('/get-product/:id', async (req, res) => {
 
 app.get('/get-products', async (req, res) => {
   try {
-    const snapshot = await db.collection('products').get();
+    const userId = req.query.userId;
+    
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' });
+    }
+
+    console.log(`📦 Fetching products for userId: ${userId}`);
+    
+    // Filter products by userId
+    const snapshot = await db.collection('products')
+      .where('userId', '==', userId)
+      .get();
+    
     const products = snapshot.docs.map(doc => {
       const data = doc.data();
       const product = { 
@@ -1019,8 +1059,11 @@ app.get('/get-products', async (req, res) => {
       
       return product;
     });
+    
+    console.log(`✅ Returning ${products.length} products for userId: ${userId}`);
     res.json(products);
   } catch (error) {
+    console.error('❌ Error fetching products:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
@@ -1252,13 +1295,17 @@ async function updateProductPrice(docId, newPrice, currentPriceHistory = [], pro
 }
 
 app.post('/refresh-product', async (req, res) => {
-  const { id } = req.body;
+  const { id, userId } = req.body;
   if (!id) {
     return res.status(400).json({ error: 'Product ID is required' });
   }
 
+  if (!userId) {
+    return res.status(400).json({ error: 'User ID is required' });
+  }
+
   try {
-    console.log(`🔄 Refreshing product: ${id}`);
+    console.log(`🔄 Refreshing product: ${id} for userId: ${userId}`);
     const doc = await db.collection('products').doc(id).get();
     if (!doc.exists) {
       console.error(`❌ Product not found: ${id}`);
@@ -1266,6 +1313,11 @@ app.post('/refresh-product', async (req, res) => {
     }
 
     const product = doc.data();
+    
+    // Verify product belongs to requesting user
+    if (product.userId !== userId) {
+      return res.status(403).json({ error: 'Access denied. Product does not belong to this user.' });
+    }
     
     // Scrape product (this is the slowest part)
     const newData = await scrapeProduct(product.url);
@@ -1299,10 +1351,14 @@ app.post('/refresh-product', async (req, res) => {
 app.post('/mark-product-bought', async (req, res) => {
   try {
     console.log('\n=== MARK PRODUCT AS BOUGHT ===');
-    const { id } = req.body;
+    const { id, userId } = req.body;
     
     if (!id) {
       return res.status(400).json({ error: 'Product ID is required' });
+    }
+
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' });
     }
 
     const searchId = String(id).trim();
@@ -1313,6 +1369,11 @@ app.post('/mark-product-bought', async (req, res) => {
     }
 
     const productData = doc.data();
+    
+    // Verify product belongs to requesting user
+    if (productData.userId !== userId) {
+      return res.status(403).json({ error: 'Access denied. Product does not belong to this user.' });
+    }
     const productTitle = productData.title || 'Product';
     
     // Delete the product
@@ -1337,86 +1398,43 @@ app.post('/delete-product', async (req, res) => {
     console.log('\n=== DELETE PRODUCT REQUEST ===');
     console.log('Request body:', JSON.stringify(req.body, null, 2));
     
-    const { id } = req.body;
+    const { id, userId } = req.body;
     
     if (!id) {
       console.error('❌ Product ID is missing in request body');
       return res.status(400).json({ error: 'Product ID is required' });
     }
 
+    if (!userId) {
+      console.error('❌ User ID is missing in request body');
+      return res.status(400).json({ error: 'User ID is required' });
+    }
+
     const searchId = String(id).trim();
-    console.log(`Searching for product with ID: "${searchId}"`);
+    console.log(`Searching for product with ID: "${searchId}" for userId: ${userId}`);
     
-    // Get ALL products from database
-    const allProductsSnapshot = await db.collection('products').get();
-    console.log(`📦 Total products in database: ${allProductsSnapshot.size}`);
+    // Get product directly by ID (more efficient)
+    const doc = await db.collection('products').doc(searchId).get();
     
-    // Log all products for debugging
-    const allProducts = [];
-    allProductsSnapshot.docs.forEach((doc, index) => {
-      const data = doc.data();
-      const productInfo = {
-        id: doc.id,
-        title: data.title || 'No title',
-        url: data.url || 'No URL'
-      };
-      allProducts.push(productInfo);
-      console.log(`  [${index + 1}] ID="${doc.id}" | Title="${productInfo.title}"`);
-    });
-    
-    // Try to find the product - first by exact ID match
-    let targetDoc = null;
-    let foundById = false;
-    
-    // Method 1: Exact ID match
-    for (const doc of allProductsSnapshot.docs) {
-      if (doc.id === searchId) {
-        targetDoc = doc;
-        foundById = true;
-        console.log(`✅ Found product by exact ID match: "${doc.id}"`);
-        break;
-      }
-    }
-    
-    // Method 2: If not found, try case-insensitive match
-    if (!targetDoc) {
-      for (const doc of allProductsSnapshot.docs) {
-        if (doc.id.toLowerCase() === searchId.toLowerCase()) {
-          targetDoc = doc;
-          foundById = true;
-          console.log(`✅ Found product by case-insensitive ID match: "${doc.id}"`);
-          break;
-        }
-      }
-    }
-    
-    // Method 3: If still not found, try to find by URL (in case ID was corrupted)
-    if (!targetDoc) {
-      console.log(`⚠️ Product not found by ID, searching all products...`);
-      for (const doc of allProductsSnapshot.docs) {
-        const data = doc.data();
-        // Check if searchId matches URL or title
-        if (data.url && data.url.includes(searchId)) {
-          targetDoc = doc;
-          console.log(`✅ Found product by URL match: "${doc.id}"`);
-          break;
-        }
-      }
-    }
-    
-    if (!targetDoc) {
+    if (!doc.exists) {
       console.error(`❌ Product not found with ID: "${searchId}"`);
-      console.error('Available product IDs:', allProducts.map(p => p.id).join(', '));
       return res.status(404).json({ 
         error: 'Product not found',
-        searchedId: searchId,
-        availableIds: allProducts.map(p => p.id)
+        searchedId: searchId
       });
     }
     
+    const productData = doc.data();
+    
+    // Verify product belongs to requesting user
+    if (productData.userId !== userId) {
+      console.error(`❌ Access denied: Product ${searchId} does not belong to userId ${userId}`);
+      return res.status(403).json({ error: 'Access denied. Product does not belong to this user.' });
+    }
+    
     // Delete the product
-    const productId = targetDoc.id;
-    const productTitle = targetDoc.data().title || 'Unknown';
+    const productId = doc.id;
+    const productTitle = productData.title || 'Unknown';
     
     console.log(`🗑️  Deleting product: "${productId}" - "${productTitle}"`);
     await db.collection('products').doc(productId).delete();
@@ -1443,10 +1461,14 @@ app.post('/set-threshold', async (req, res) => {
     console.log('\n=== SET THRESHOLD REQUEST ===');
     console.log('Request body:', JSON.stringify(req.body, null, 2));
     
-    const { id, threshold } = req.body;
+    const { id, threshold, userId } = req.body;
     
     if (!id) {
       return res.status(400).json({ error: 'Product ID is required' });
+    }
+    
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' });
     }
     
     if (threshold === undefined || threshold === null) {
@@ -1460,49 +1482,12 @@ app.post('/set-threshold', async (req, res) => {
       return res.status(400).json({ error: 'Invalid threshold price. Must be a positive number.' });
     }
     
-    console.log(`Searching for product with ID: "${searchId}", threshold: ${thresholdNum}`);
+    console.log(`Searching for product with ID: "${searchId}", threshold: ${thresholdNum}, userId: ${userId}`);
     
-    // Get ALL products from database
-    const allProductsSnapshot = await db.collection('products').get();
-    console.log(`📦 Total products in database: ${allProductsSnapshot.size}`);
+    // Get product directly by ID
+    const doc = await db.collection('products').doc(searchId).get();
     
-    // Try to find the product - first by exact ID match
-    let targetDoc = null;
-    
-    // Method 1: Exact ID match
-    for (const doc of allProductsSnapshot.docs) {
-      if (doc.id === searchId) {
-        targetDoc = doc;
-        console.log(`✅ Found product by exact ID match: "${doc.id}"`);
-        break;
-      }
-    }
-    
-    // Method 2: If not found, try case-insensitive match
-    if (!targetDoc) {
-      for (const doc of allProductsSnapshot.docs) {
-        if (doc.id.toLowerCase() === searchId.toLowerCase()) {
-          targetDoc = doc;
-          console.log(`✅ Found product by case-insensitive ID match: "${doc.id}"`);
-          break;
-        }
-      }
-    }
-    
-    // Method 3: If still not found, try to find by URL
-    if (!targetDoc) {
-      console.log(`⚠️ Product not found by ID, searching by URL...`);
-      for (const doc of allProductsSnapshot.docs) {
-        const data = doc.data();
-        if (data.url && data.url.includes(searchId)) {
-          targetDoc = doc;
-          console.log(`✅ Found product by URL match: "${doc.id}"`);
-          break;
-        }
-      }
-    }
-    
-    if (!targetDoc) {
+    if (!doc.exists) {
       console.error(`❌ Product not found with ID: "${searchId}"`);
       return res.status(404).json({ 
         error: 'Product not found',
@@ -1510,8 +1495,13 @@ app.post('/set-threshold', async (req, res) => {
       });
     }
     
-    const product = targetDoc.data();
-    const productId = targetDoc.id;
+    const product = doc.data();
+    const productId = doc.id;
+    
+    // Verify product belongs to requesting user
+    if (product.userId !== userId) {
+      return res.status(403).json({ error: 'Access denied. Product does not belong to this user.' });
+    }
     
     // Validate threshold against current price
     const currentPriceNum = parsePrice(product.price);
@@ -1551,12 +1541,29 @@ app.post('/set-threshold', async (req, res) => {
 });
 
 app.post('/remove-threshold', async (req, res) => {
-  const { id } = req.body;
+  const { id, userId } = req.body;
   if (!id) {
     return res.status(400).json({ error: 'Product ID is required' });
   }
 
+  if (!userId) {
+    return res.status(400).json({ error: 'User ID is required' });
+  }
+
   try {
+    const doc = await db.collection('products').doc(id).get();
+    
+    if (!doc.exists) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+    
+    const product = doc.data();
+    
+    // Verify product belongs to requesting user
+    if (product.userId !== userId) {
+      return res.status(403).json({ error: 'Access denied. Product does not belong to this user.' });
+    }
+    
     await db.collection('products').doc(id).update({
       thresholdPrice: null,
       thresholdReached: false
@@ -1700,10 +1707,14 @@ app.get('/scrape-all', async (req, res) => {
 // Restore Product Endpoint (fast restore without scraping)
 app.post('/restore-product', async (req, res) => {
   try {
-    const { productData } = req.body;
+    const { productData, userId } = req.body;
     
     if (!productData || !productData.url) {
       return res.status(400).json({ error: 'Product data is required' });
+    }
+
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' });
     }
 
     const now = new Date().toISOString();
@@ -1719,11 +1730,13 @@ app.post('/restore-product', async (req, res) => {
       }],
       thresholdPrice: productData.thresholdPrice || null,
       thresholdReached: productData.thresholdReached || false,
+      userId: userId // ✅ Store userId with restored product
     };
 
-    // Check if product already exists
+    // Check if product already exists for this user
     const existing = await db.collection('products')
       .where('url', '==', productData.url)
+      .where('userId', '==', userId)
       .limit(1)
       .get();
 

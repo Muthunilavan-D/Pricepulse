@@ -11,6 +11,7 @@ import '../models/notification_model.dart';
 import 'add_product_screen.dart';
 import 'notifications_screen.dart';
 import '../widgets/glass_snackbar.dart';
+import 'profile_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({Key? key}) : super(key: key);
@@ -646,6 +647,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _sortAscending;
   }
 
+
   Widget _buildFilterChip(String label, VoidCallback onRemove) {
     return Padding(
       padding: const EdgeInsets.only(right: 8),
@@ -995,6 +997,25 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                         )
                       : null,
+                ),
+                // Profile screen navigation
+                _GlassAppBarIconButton(
+                  icon: Icons.account_circle_rounded,
+                  onPressed: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const ProfileScreen(),
+                      ),
+                    );
+                    // Reload products when returning from profile (if needed)
+                    if (mounted) {
+                      _fetchProducts().catchError((e) {
+                        print('Error reloading products: $e');
+                      });
+                    }
+                  },
+                  tooltip: 'Profile',
                 ),
               ],
               if (_isSelectionMode && _selectedProductIds.isNotEmpty)
