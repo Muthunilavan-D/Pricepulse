@@ -1759,6 +1759,13 @@ app.post('/track-product', async (req, res) => {
       });
     }
     
+    // Validate threshold is at least 40% of current price
+    if (currentPriceNum !== null && thresholdNum < (currentPriceNum * 0.4)) {
+      return res.status(400).json({ 
+        error: `Threshold price (₹${thresholdNum}) must be at least 40% of the current price (₹${currentPriceNum}).` 
+      });
+    }
+    
     validatedThreshold = thresholdNum;
   }
 
@@ -1901,6 +1908,7 @@ app.get('/get-products', async (req, res) => {
         notificationType: data.notificationType || null,
         notificationMessage: data.notificationMessage || null,
         notificationTimestamp: data.notificationTimestamp || null,
+        isBought: data.isBought || false, // Ensure isBought is always present
         image: data.image || '' // Ensure image is always present
       };
       
@@ -2278,15 +2286,23 @@ app.post('/mark-product-bought', async (req, res) => {
     }
     const productTitle = productData.title || 'Product';
     
-    // Delete the product
-    await db.collection('products').doc(searchId).delete();
+    // Mark product as bought instead of deleting
+    await db.collection('products').doc(searchId).update({
+      isBought: true,
+      thresholdPrice: null, // Clear threshold when bought
+      thresholdReached: false,
+      hasNotification: false,
+      notificationType: null,
+      notificationMessage: null,
+      notificationTimestamp: null,
+    });
     
-    console.log(`✅ Product marked as bought and removed: "${productTitle}"`);
+    console.log(`✅ Product marked as bought: "${productTitle}"`);
     
     res.json({ 
       message: 'Product marked as bought',
       productTitle: productTitle,
-      removed: true
+      isBought: true
     });
   } catch (error) {
     console.error('❌ Mark as bought error:', error.message);
@@ -2410,6 +2426,13 @@ app.post('/set-threshold', async (req, res) => {
     if (currentPriceNum !== null && thresholdNum >= currentPriceNum) {
       return res.status(400).json({ 
         error: `Threshold price (₹${thresholdNum}) must be less than current price (₹${currentPriceNum})` 
+      });
+    }
+    
+    // Validate threshold is at least 40% of current price
+    if (currentPriceNum !== null && thresholdNum < (currentPriceNum * 0.4)) {
+      return res.status(400).json({ 
+        error: `Threshold price (₹${thresholdNum}) must be at least 40% of the current price (₹${currentPriceNum}).` 
       });
     }
     
