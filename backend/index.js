@@ -629,28 +629,27 @@ async function scrapeProduct(url, retryCount = 0) {
     if (isAmazon) {
       console.log('🛒 Scraping Amazon product...');
       
-      // Try multiple Amazon price selectors (they change frequently)
+      // Try multiple Amazon price selectors (prioritize final price to pay)
+      // IMPORTANT: Order matters - we want the final price customer pays, not discounted/variant prices
       const priceSelectors = [
-        '.a-price .a-offscreen',
-        '.a-price-whole',
-        '#priceblock_ourprice',
-        '#priceblock_dealprice',
-        '.a-price.a-text-price .a-offscreen',
-        '[data-a-color="price"] .a-offscreen',
-        '.a-price[data-a-color="price"] .a-offscreen',
-        '#price',
-        '.apexPriceToPay .a-offscreen',
-        '#corePriceDisplay_desktop_feature_div .a-price .a-offscreen',
-        '.a-price-symbol + .a-price-whole',
-        'span.a-price-whole',
-        '.a-price .a-price-whole',
-        '#priceblock_saleprice',
-        '#priceblock_buyingprice',
-        '.a-size-medium.a-color-price',
-        '[id*="price"]',
-        '[class*="price"]',
-        '.a-text-price .a-offscreen',
-        'span[data-a-color="price"]'
+        '.apexPriceToPay .a-offscreen',  // Final price to pay (most accurate)
+        '.apexPriceToPay span.a-price-whole',  // Final price whole number
+        '#corePriceDisplay_desktop_feature_div .a-price .a-offscreen',  // Desktop final price
+        '#corePrice_feature_div .a-price .a-offscreen',  // Alternative final price
+        '.a-price.a-text-price .a-offscreen',  // Regular price with offscreen
+        '.a-price .a-offscreen',  // General price with offscreen
+        '[data-a-color="price"] .a-offscreen',  // Price with data attribute
+        '.a-price[data-a-color="price"] .a-offscreen',  // Price with data attribute variant
+        '#priceblock_ourprice',  // Our price block
+        '#priceblock_dealprice',  // Deal price block
+        '#price',  // Simple price ID
+        '#priceblock_saleprice',  // Sale price
+        '#priceblock_buyingprice',  // Buying price
+        // Only use .a-price-whole as last resort and combine with fraction if available
+        '.a-text-price .a-offscreen',  // Text price with offscreen
+        'span[data-a-color="price"]',  // Price span
+        '.a-size-medium.a-color-price',  // Medium size price
+        // Fallback: combine whole + fraction for complete price
       ];
       
       console.log(`   Trying ${priceSelectors.length} price selectors...`);
@@ -660,6 +659,92 @@ async function scrapeProduct(url, retryCount = 0) {
           price = priceText;
           console.log(`✅ Found Amazon price with selector: ${selector} = ${priceText}`);
           break;
+        }
+      }
+      
+      // If we still don't have a price, try combining .a-price-whole with .a-price-fraction
+      // IMPORTANT: Only use this from apexPriceToPay container to avoid getting discounted prices
+      if (!price) {
+        console.log('   Trying to combine price-whole and price-fraction from apexPriceToPay...');
+        // First try to get price from apexPriceToPay container (final price)
+        const apexContainer = $('.apexPriceToPay');
+        if (apexContainer.length > 0) {
+          const priceWhole = apexContainer.find('.a-price-whole').first().text().trim();
+          const priceFraction = apexContainer.find('.a-price-fraction').first().text().trim();
+          
+          if (priceWhole) {
+            if (priceFraction) {
+              // Combine whole and fraction
+              price = `₹${priceWhole}.${priceFraction}`;
+              console.log(`✅ Found Amazon price by combining whole + fraction from apexPriceToPay: ${price}`);
+            } else {
+              // Just use whole number
+              price = `₹${priceWhole}`;
+              console.log(`✅ Found Amazon price (whole only from apexPriceToPay): ${price}`);
+            }
+          }
+        }
+        
+        // If still no price, try from any .a-price container (but be careful - might be discounted)
+        if (!price) {
+          console.log('   Trying to combine price-whole and price-fraction from general container...');
+          const priceWhole = $('.a-price-whole').first().text().trim();
+          const priceFraction = $('.a-price-fraction').first().text().trim();
+          
+          if (priceWhole) {
+            if (priceFraction) {
+              // Combine whole and fraction
+              price = `₹${priceWhole}.${priceFraction}`;
+              console.log(`✅ Found Amazon price by combining whole + fraction: ${price}`);
+            } else {
+              // Just use whole number
+              price = `₹${priceWhole}`;
+              console.log(`✅ Found Amazon price (whole only): ${price}`);
+            }
+          }
+        }
+      }
+      
+      // Validate and correct price: Ensure we have the final price, not a discounted/variant price
+      if (price) {
+        // Extract numeric value from price string
+        const priceMatch = price.replace(/[₹,\s]/g, '').match(/(\d+)/);
+        if (priceMatch) {
+          const numericPrice = parseFloat(priceMatch[1]);
+          
+          // Always try to get price from apexPriceToPay (final price to pay) as validation
+          // This ensures we're not getting a discounted price or variant
+          const apexPrice = $('.apexPriceToPay .a-offscreen').first().text().trim();
+          if (apexPrice) {
+            const apexPriceMatch = apexPrice.replace(/[₹,\s]/g, '').match(/(\d+)/);
+            if (apexPriceMatch) {
+              const apexNumericPrice = parseFloat(apexPriceMatch[1]);
+              
+              // If apexPriceToPay has a different (higher) price, use it instead
+              // This handles cases where we got a discounted price or variant
+              if (apexNumericPrice > numericPrice) {
+                console.log(`⚠️  Found higher price in apexPriceToPay (${apexNumericPrice} vs ${numericPrice}), using apexPriceToPay`);
+                price = apexPrice;
+                console.log(`✅ Using final price from apexPriceToPay: ${price}`);
+              } else if (apexNumericPrice < numericPrice) {
+                // If apexPriceToPay is lower, it might be the actual discounted price
+                // But we should prefer the higher one (original price) unless apexPriceToPay is the final price
+                console.log(`ℹ️  apexPriceToPay shows lower price (${apexNumericPrice}), keeping current price: ${price}`);
+              }
+            }
+          }
+          
+          // Also check if price seems suspiciously low (less than 100) - might be a discount amount
+          if (numericPrice < 100 && apexPrice) {
+            const apexPriceMatch = apexPrice.replace(/[₹,\s]/g, '').match(/(\d+)/);
+            if (apexPriceMatch) {
+              const apexNumericPrice = parseFloat(apexPriceMatch[1]);
+              if (apexNumericPrice >= 100) {
+                price = apexPrice;
+                console.log(`✅ Corrected suspiciously low price using apexPriceToPay: ${price}`);
+              }
+            }
+          }
         }
       }
 
