@@ -1,5 +1,6 @@
-🛒 Price Pulse – Smart Price Tracker App
-Price Pulse is a modern Flutter application that helps users track product prices over time and make smarter buying decisions. With price-drop alerts, local history storage, and clean UI, the app ensures you never miss a good deal again. Ideal for shoppers who want to avoid overpaying and buy products at the right moment.
+🛒 PRICE PULSE – SMART PRICE TRACKER APP
+
+Price Pulse is a modern Flutter application that helps users track product prices over time and make smarter buying decisions. With price-drop alerts, local history storage, and a clean UI, the app ensures you never miss a good deal again. Ideal for shoppers who want to avoid overpaying and buy products at the right moment.
 
 🚀 Features
 
@@ -26,7 +27,7 @@ Dart – Business logic
 
 Hive – Local NoSQL storage for price data
 
-Local Notifications – Alerts when price drops
+Local Notifications – Alerts on price drops
 
 📸 Screenshots
 (Add UI previews showing product list, price history, and alert setup pages here.)
