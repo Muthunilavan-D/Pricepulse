@@ -831,38 +831,86 @@ async function scrapeProduct(url, retryCount = 0) {
       }
 
       // If all selectors fail, try extracting from JSON-LD structured data
+      // JSON-LD usually has the actual selling price, not MRP
       if (!price) {
         console.log('   All price selectors failed. Trying JSON-LD structured data...');
         try {
           const jsonLdScripts = $('script[type="application/ld+json"]');
+          let lowestPrice = null;
+          let lowestPriceValue = Infinity;
+          
           for (let i = 0; i < jsonLdScripts.length; i++) {
             try {
               const jsonData = JSON.parse($(jsonLdScripts[i]).html());
-              if (jsonData.offers && jsonData.offers.price) {
-                const extractedPrice = jsonData.offers.price;
-                if (typeof extractedPrice === 'number') {
-                  price = `₹${extractedPrice.toLocaleString('en-IN')}`;
-                  console.log(`✅ Found price in JSON-LD: ${price}`);
-                  break;
-                } else if (typeof extractedPrice === 'string') {
-                  price = extractedPrice;
-                  console.log(`✅ Found price in JSON-LD: ${price}`);
-                  break;
+              
+              // Check for offers.price (actual selling price)
+              if (jsonData.offers) {
+                // Handle single offer
+                if (jsonData.offers.price) {
+                  const extractedPrice = jsonData.offers.price;
+                  let priceValue = null;
+                  if (typeof extractedPrice === 'number') {
+                    priceValue = extractedPrice;
+                  } else if (typeof extractedPrice === 'string') {
+                    priceValue = parseFloat(extractedPrice.replace(/[₹,\s]/g, ''));
+                  }
+                  
+                  if (priceValue && priceValue < lowestPriceValue) {
+                    lowestPriceValue = priceValue;
+                    lowestPrice = typeof extractedPrice === 'number' 
+                      ? `₹${extractedPrice.toLocaleString('en-IN')}` 
+                      : extractedPrice;
+                  }
+                }
+                
+                // Handle array of offers (get the lowest price)
+                if (Array.isArray(jsonData.offers)) {
+                  for (const offer of jsonData.offers) {
+                    if (offer.price) {
+                      let priceValue = null;
+                      if (typeof offer.price === 'number') {
+                        priceValue = offer.price;
+                      } else if (typeof offer.price === 'string') {
+                        priceValue = parseFloat(offer.price.replace(/[₹,\s]/g, ''));
+                      }
+                      
+                      if (priceValue && priceValue < lowestPriceValue) {
+                        lowestPriceValue = priceValue;
+                        lowestPrice = typeof offer.price === 'number' 
+                          ? `₹${offer.price.toLocaleString('en-IN')}` 
+                          : offer.price;
+                      }
+                    }
+                  }
                 }
               }
-              // Also check for aggregateOffer
+              
+              // Also check for aggregateOffer (lowPrice is the actual selling price)
               if (jsonData.aggregateOffer && jsonData.aggregateOffer.lowPrice) {
                 const extractedPrice = jsonData.aggregateOffer.lowPrice;
+                let priceValue = null;
                 if (typeof extractedPrice === 'number') {
-                  price = `₹${extractedPrice.toLocaleString('en-IN')}`;
-                  console.log(`✅ Found price in JSON-LD aggregateOffer: ${price}`);
-                  break;
+                  priceValue = extractedPrice;
+                } else if (typeof extractedPrice === 'string') {
+                  priceValue = parseFloat(extractedPrice.replace(/[₹,\s]/g, ''));
+                }
+                
+                if (priceValue && priceValue < lowestPriceValue) {
+                  lowestPriceValue = priceValue;
+                  lowestPrice = typeof extractedPrice === 'number' 
+                    ? `₹${extractedPrice.toLocaleString('en-IN')}` 
+                    : extractedPrice;
                 }
               }
             } catch (parseError) {
               // Continue to next script tag
               continue;
             }
+          }
+          
+          if (lowestPrice) {
+            price = lowestPrice;
+            console.log(`✅ Found price in JSON-LD (lowest price): ${price}`);
           }
         } catch (jsonError) {
           console.log(`   JSON-LD extraction failed: ${jsonError.message}`);
@@ -1457,6 +1505,35 @@ async function scrapeProduct(url, retryCount = 0) {
       }
       
       return null;
+    }
+
+    // FINAL VALIDATION: One last check to ensure we have the actual price, not MRP
+    // This is a safety net to catch any edge cases
+    if (price) {
+      // Double-check apexPriceToPay one more time (it's the most reliable source)
+      const finalApexPrice = $('.apexPriceToPay .a-offscreen').first().text().trim();
+      if (finalApexPrice) {
+        const currentPriceMatch = price.replace(/[₹,\s]/g, '').match(/(\d+)/);
+        const apexPriceMatch = finalApexPrice.replace(/[₹,\s]/g, '').match(/(\d+)/);
+        
+        if (currentPriceMatch && apexPriceMatch) {
+          const currentNumeric = parseFloat(currentPriceMatch[1]);
+          const apexNumeric = parseFloat(apexPriceMatch[1]);
+          
+          // If prices differ significantly, prefer apexPriceToPay (it's the actual price)
+          // Also, if current price is much higher, it's likely MRP
+          if (Math.abs(currentNumeric - apexNumeric) > 10) {
+            // If apexPriceToPay is lower, it's likely the actual discounted price
+            if (apexNumeric < currentNumeric) {
+              console.log(`⚠️  Final validation: Current price (${price}) is higher than apexPriceToPay (${finalApexPrice}). Using apexPriceToPay (actual price).`);
+              price = finalApexPrice;
+            }
+          }
+        }
+      }
+      
+      // Log final price for debugging
+      console.log(`💰 Final validated price: ${price}`);
     }
 
     const result = { 
