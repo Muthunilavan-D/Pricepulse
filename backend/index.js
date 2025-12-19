@@ -306,7 +306,8 @@ async function scrapeProduct(url, retryCount = 0) {
     let normalizedUrl = normalizeUrl(resolvedUrl);
     console.log(`🔧 Normalized URL: ${normalizedUrl}`);
     
-    // Strategy: Try different URL formats for Amazon to avoid CAPTCHA
+    // Optimized strategy: Start with desktop to get cookies, then use mobile with cookies
+    // This matches the successful approach from logs
     const isAmazonUrl = normalizedUrl.includes('amazon.in') || normalizedUrl.includes('amazon.com');
     if (isAmazonUrl) {
       // Extract product ID (ASIN) from URL
@@ -314,29 +315,30 @@ async function scrapeProduct(url, retryCount = 0) {
       const asin = asinMatch ? asinMatch[1] : null;
       
       if (asin) {
-        // First attempt: try mobile version with clean URL (no query params)
-        if (retryCount === 0 && !normalizedUrl.includes('m.amazon')) {
-          normalizedUrl = `https://m.amazon.in/dp/${asin}`;
-          console.log(`📱 Using mobile version with clean URL (less bot detection): ${normalizedUrl}`);
-        }
-        // Second attempt: try desktop version with clean URL
-        else if (retryCount === 1 && normalizedUrl.includes('m.amazon')) {
+        // Always start with desktop version (to get cookies from challenge if present)
+        // Then challenge bypass will use mobile with cookies (the successful approach)
+        if (retryCount === 0) {
           normalizedUrl = `https://www.amazon.in/dp/${asin}`;
-          console.log(`🖥️  Retrying with desktop clean URL: ${normalizedUrl}`);
+          console.log(`🖥️  Using desktop version first (to get cookies): ${normalizedUrl}`);
         }
-        // Third attempt: try original normalized URL (with query params)
+        // Only retry if challenge bypass failed - use mobile directly
+        else if (retryCount === 1) {
+          normalizedUrl = `https://m.amazon.in/dp/${asin}`;
+          console.log(`📱 Retrying with mobile version: ${normalizedUrl}`);
+        }
+        // Final fallback: original normalized URL
         else if (retryCount === 2) {
           normalizedUrl = normalizeUrl(resolvedUrl);
-          console.log(`🔄 Retrying with original normalized URL: ${normalizedUrl}`);
+          console.log(`🔄 Final retry with original normalized URL: ${normalizedUrl}`);
         }
       } else {
-        // Fallback to original strategy if ASIN not found
-        if (retryCount === 0 && !normalizedUrl.includes('m.amazon')) {
+        // Fallback if ASIN not found - use desktop first
+        if (retryCount === 0) {
+          // Keep desktop version
+          console.log(`🖥️  Using desktop version first: ${normalizedUrl}`);
+        } else if (retryCount === 1) {
           normalizedUrl = normalizedUrl.replace(/www\.amazon\.(in|com)/, 'm.amazon.$1');
-          console.log(`📱 Using mobile version first (less bot detection): ${normalizedUrl}`);
-        } else if (retryCount === 1 && normalizedUrl.includes('m.amazon')) {
-          normalizedUrl = normalizedUrl.replace(/m\.amazon\.(in|com)/, 'www.amazon.$1');
-          console.log(`🖥️  Retrying with desktop version: ${normalizedUrl}`);
+          console.log(`📱 Retrying with mobile version: ${normalizedUrl}`);
         }
       }
     }
@@ -412,6 +414,9 @@ async function scrapeProduct(url, retryCount = 0) {
     console.log(`📄 HTML Sample (first 1000 chars):`, htmlSample);
 
     const $ = cheerio.load(response.data);
+    
+    // Track if challenge bypass succeeded (used later to skip unnecessary retries)
+    let challengeBypassSucceeded = false;
     
     // Enhanced CAPTCHA/challenge detection - check for multiple indicators
     const pageHtml = $.html().toLowerCase();
@@ -529,8 +534,13 @@ async function scrapeProduct(url, retryCount = 0) {
             
             if (!stillBlocked) {
               console.log('✅ Successfully bypassed challenge with mobile URL!');
-              // Use the new cheerio instance
+              // Use the new cheerio instance and update response data
               Object.assign($, $new);
+              response.data = response.data; // Update response with new data
+              // Update normalizedUrl to mobile for consistent logging
+              normalizedUrl = mobileUrl;
+              challengeBypassSucceeded = true;
+              // Skip desktop fallback since mobile worked
             } else {
               console.log('⚠️  Challenge still present, trying desktop version...');
               
@@ -562,6 +572,8 @@ async function scrapeProduct(url, retryCount = 0) {
                 if (!stillBlockedDesktop) {
                   console.log('✅ Successfully bypassed challenge with desktop URL!');
                   Object.assign($, $desktop);
+                  response.data = response.data; // Update response with new data
+                  challengeBypassSucceeded = true;
                 }
               } catch (desktopError) {
                 console.warn('⚠️  Desktop retry also failed:', desktopError.message);
@@ -1253,11 +1265,17 @@ async function scrapeProduct(url, retryCount = 0) {
         console.error('   ⚠️  Page does not appear to be a product page');
       }
       
-      // Retry with different version if we haven't already
-      // If we tried mobile first and it failed, try desktop
-      // If we tried desktop first and it failed, try mobile
+      // Retry logic: Only retry if challenge bypass didn't succeed
+      // If challenge bypass succeeded but scraping failed, don't retry (data issue, not access issue)
       const isAmazonUrl = normalizedUrl.includes('amazon.in') || normalizedUrl.includes('amazon.com');
       const triedMobile = normalizedUrl.includes('m.amazon');
+      
+      // Don't retry if challenge bypass already succeeded (we got past the challenge)
+      if (challengeBypassSucceeded) {
+        console.log('⚠️  Challenge bypass succeeded but scraping failed - likely page structure issue, not retrying');
+        return null;
+      }
+      
       const shouldRetry = retryCount < MAX_RETRIES && isAmazonUrl;
       
       if (shouldRetry) {
@@ -1266,7 +1284,7 @@ async function scrapeProduct(url, retryCount = 0) {
         } else {
           console.log(`🔄 Retrying with mobile version (desktop failed)...`);
         }
-        // Reduced delay for faster retries - mobile-first approach works better
+        // Reduced delay for faster retries
         await randomDelay(1000, 2000);
         return await scrapeProduct(url, retryCount + 1);
       }
