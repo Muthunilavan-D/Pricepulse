@@ -372,6 +372,14 @@ async function scrapeProduct(url, retryCount = 0) {
       console.log(`📎 Request was redirected to: ${finalRequestUrl}`);
     }
 
+    // Debug: Log response status and headers
+    console.log(`📊 Response Status: ${response.status} ${response.statusText}`);
+    console.log(`📊 Response Headers:`, JSON.stringify(response.headers, null, 2).substring(0, 200) + '...');
+    
+    // Debug: Log a sample of the HTML to see what we're getting
+    const htmlSample = response.data.toString().substring(0, 1000);
+    console.log(`📄 HTML Sample (first 1000 chars):`, htmlSample);
+
     const $ = cheerio.load(response.data);
     
     // Enhanced CAPTCHA detection - check for multiple indicators
@@ -407,10 +415,19 @@ async function scrapeProduct(url, retryCount = 0) {
     
     if (isBlocked || hasCaptchaElement) {
       console.warn('⚠️  Page appears to be blocked or requires CAPTCHA');
+      console.warn(`   isBlocked: ${isBlocked}, hasCaptchaElement: ${hasCaptchaElement}`);
       
-      // If it's Amazon and we haven't tried mobile yet, retry with mobile
-      if (isAmazonUrl && retryCount === 0 && !normalizedUrl.includes('m.amazon')) {
-        console.log('🔄 CAPTCHA detected, will retry with mobile version...');
+      // Log more details about what was detected
+      if (isBlocked) {
+        const detectedIndicators = captchaIndicators.filter(indicator => 
+          pageHtml.includes(indicator) || pageText.includes(indicator) || responseText.includes(indicator)
+        );
+        console.warn(`   Detected indicators: ${detectedIndicators.join(', ')}`);
+      }
+      
+      // If it's Amazon and we haven't tried desktop yet (we tried mobile first), retry with desktop
+      if (isAmazonUrl && retryCount === 0 && normalizedUrl.includes('m.amazon')) {
+        console.log('🔄 CAPTCHA detected on mobile, will retry with desktop version...');
         // Will retry below
       } else if (retryCount < MAX_RETRIES) {
         // Try one more time with different approach
@@ -1071,13 +1088,19 @@ async function scrapeProduct(url, retryCount = 0) {
         console.error('   ⚠️  Page does not appear to be a product page');
       }
       
-      // Retry with mobile version if we haven't already
-      const shouldRetryMobile = retryCount < MAX_RETRIES && 
-                               (normalizedUrl.includes('amazon.in') || normalizedUrl.includes('amazon.com')) && 
-                               !normalizedUrl.includes('m.amazon');
+      // Retry with different version if we haven't already
+      // If we tried mobile first and it failed, try desktop
+      // If we tried desktop first and it failed, try mobile
+      const isAmazonUrl = normalizedUrl.includes('amazon.in') || normalizedUrl.includes('amazon.com');
+      const triedMobile = normalizedUrl.includes('m.amazon');
+      const shouldRetry = retryCount < MAX_RETRIES && isAmazonUrl;
       
-      if (shouldRetryMobile) {
-        console.log(`🔄 Retrying with mobile version...`);
+      if (shouldRetry) {
+        if (triedMobile) {
+          console.log(`🔄 Retrying with desktop version (mobile failed)...`);
+        } else {
+          console.log(`🔄 Retrying with mobile version (desktop failed)...`);
+        }
         // Add delay before retry to avoid rate limiting
         await randomDelay(2000, 4000);
         return await scrapeProduct(url, retryCount + 1);
