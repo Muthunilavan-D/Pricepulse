@@ -10,7 +10,27 @@ const PORT = process.env.PORT || 5000;
 console.log('Starting server...');
 
 // Initialize Firebase Admin
-const serviceAccount = require('./serviceAccountKey.json');
+let serviceAccount;
+if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+  // Use environment variable (for production/deployment)
+  try {
+    serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+    console.log('✅ Using Firebase service account from environment variable');
+  } catch (e) {
+    console.error('❌ Error parsing FIREBASE_SERVICE_ACCOUNT:', e.message);
+    throw new Error('Invalid FIREBASE_SERVICE_ACCOUNT environment variable');
+  }
+} else {
+  // Use local file (for development)
+  try {
+    serviceAccount = require('./serviceAccountKey.json');
+    console.log('✅ Using Firebase service account from local file');
+  } catch (e) {
+    console.error('❌ Error loading serviceAccountKey.json:', e.message);
+    throw new Error('Firebase service account not found. Set FIREBASE_SERVICE_ACCOUNT environment variable or provide serviceAccountKey.json file');
+  }
+}
+
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
 });
