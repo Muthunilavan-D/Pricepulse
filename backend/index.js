@@ -287,7 +287,7 @@ function randomDelay(min = 1000, max = 3000) {
 }
 
 // Helper function to scrape product
-const MAX_RETRIES = 2;
+const MAX_RETRIES = 3; // Increased to try clean URLs
 async function scrapeProduct(url, retryCount = 0) {
   try {
     console.log(`\n🔍 Starting scrape for URL: ${url}${retryCount > 0 ? ` (Retry ${retryCount}/${MAX_RETRIES})` : ''}`);
@@ -305,19 +305,38 @@ async function scrapeProduct(url, retryCount = 0) {
     let normalizedUrl = normalizeUrl(resolvedUrl);
     console.log(`🔧 Normalized URL: ${normalizedUrl}`);
     
-    // Strategy: Try mobile version first for Amazon (less likely to show CAPTCHA)
-    // If that fails, retry with desktop version
+    // Strategy: Try different URL formats for Amazon to avoid CAPTCHA
     const isAmazonUrl = normalizedUrl.includes('amazon.in') || normalizedUrl.includes('amazon.com');
     if (isAmazonUrl) {
-      // First attempt: try mobile version (less bot detection)
-      if (retryCount === 0 && !normalizedUrl.includes('m.amazon')) {
-        normalizedUrl = normalizedUrl.replace(/www\.amazon\.(in|com)/, 'm.amazon.$1');
-        console.log(`📱 Using mobile version first (less bot detection): ${normalizedUrl}`);
-      }
-      // Second attempt: try desktop version if mobile failed
-      else if (retryCount === 1 && normalizedUrl.includes('m.amazon')) {
-        normalizedUrl = normalizedUrl.replace(/m\.amazon\.(in|com)/, 'www.amazon.$1');
-        console.log(`🖥️  Retrying with desktop version: ${normalizedUrl}`);
+      // Extract product ID (ASIN) from URL
+      const asinMatch = normalizedUrl.match(/\/dp\/([A-Z0-9]{10})/);
+      const asin = asinMatch ? asinMatch[1] : null;
+      
+      if (asin) {
+        // First attempt: try mobile version with clean URL (no query params)
+        if (retryCount === 0 && !normalizedUrl.includes('m.amazon')) {
+          normalizedUrl = `https://m.amazon.in/dp/${asin}`;
+          console.log(`📱 Using mobile version with clean URL (less bot detection): ${normalizedUrl}`);
+        }
+        // Second attempt: try desktop version with clean URL
+        else if (retryCount === 1 && normalizedUrl.includes('m.amazon')) {
+          normalizedUrl = `https://www.amazon.in/dp/${asin}`;
+          console.log(`🖥️  Retrying with desktop clean URL: ${normalizedUrl}`);
+        }
+        // Third attempt: try original normalized URL (with query params)
+        else if (retryCount === 2) {
+          normalizedUrl = normalizeUrl(resolvedUrl);
+          console.log(`🔄 Retrying with original normalized URL: ${normalizedUrl}`);
+        }
+      } else {
+        // Fallback to original strategy if ASIN not found
+        if (retryCount === 0 && !normalizedUrl.includes('m.amazon')) {
+          normalizedUrl = normalizedUrl.replace(/www\.amazon\.(in|com)/, 'm.amazon.$1');
+          console.log(`📱 Using mobile version first (less bot detection): ${normalizedUrl}`);
+        } else if (retryCount === 1 && normalizedUrl.includes('m.amazon')) {
+          normalizedUrl = normalizedUrl.replace(/m\.amazon\.(in|com)/, 'www.amazon.$1');
+          console.log(`🖥️  Retrying with desktop version: ${normalizedUrl}`);
+        }
       }
     }
     
@@ -1293,12 +1312,17 @@ app.post('/track-product', async (req, res) => {
   
   if (!data || !data.price) {
     return res.status(500).json({ 
-      error: 'Could not fetch product details. Possible reasons:\n' +
+      error: 'Could not fetch product details. Amazon is showing a CAPTCHA (bot detection).\n\n' +
+             'Possible reasons:\n' +
+             '• Amazon detected automated access and is blocking requests\n' +
              '• Website structure may have changed\n' +
              '• Product may require login to view\n' +
              '• Product may be out of stock\n' +
-             '• URL may not be a valid product page\n' +
-             '• Network connection issue'
+             '• URL may not be a valid product page\n\n' +
+             '💡 Suggestions:\n' +
+             '• Try again in a few minutes\n' +
+             '• Use a different product URL\n' +
+             '• The product may need to be added manually'
     });
   }
   
