@@ -629,44 +629,79 @@ async function scrapeProduct(url, retryCount = 0) {
     if (isAmazon) {
       console.log('🛒 Scraping Amazon product...');
       
-      // Try multiple Amazon price selectors (prioritize final price to pay)
-      // IMPORTANT: Order matters - we want the final price customer pays, not discounted/variant prices
-      const priceSelectors = [
-        '.apexPriceToPay .a-offscreen',  // Final price to pay (most accurate)
-        '.apexPriceToPay span.a-price-whole',  // Final price whole number
-        '#corePriceDisplay_desktop_feature_div .a-price .a-offscreen',  // Desktop final price
-        '#corePrice_feature_div .a-price .a-offscreen',  // Alternative final price
-        '.a-price.a-text-price .a-offscreen',  // Regular price with offscreen
-        '.a-price .a-offscreen',  // General price with offscreen
-        '[data-a-color="price"] .a-offscreen',  // Price with data attribute
-        '.a-price[data-a-color="price"] .a-offscreen',  // Price with data attribute variant
-        '#priceblock_ourprice',  // Our price block
-        '#priceblock_dealprice',  // Deal price block
-        '#price',  // Simple price ID
-        '#priceblock_saleprice',  // Sale price
-        '#priceblock_buyingprice',  // Buying price
-        // Only use .a-price-whole as last resort and combine with fraction if available
-        '.a-text-price .a-offscreen',  // Text price with offscreen
-        'span[data-a-color="price"]',  // Price span
-        '.a-size-medium.a-color-price',  // Medium size price
-        // Fallback: combine whole + fraction for complete price
-      ];
-      
-      console.log(`   Trying ${priceSelectors.length} price selectors...`);
-      for (const selector of priceSelectors) {
-        const priceText = $(selector).first().text().trim();
-        if (priceText) {
-          price = priceText;
-          console.log(`✅ Found Amazon price with selector: ${selector} = ${priceText}`);
-          break;
+      // CRITICAL: First, always try to get price from apexPriceToPay (final price to pay)
+      // This is Amazon's container for the actual price customer pays, not MRP
+      const apexContainer = $('.apexPriceToPay');
+      if (apexContainer.length > 0) {
+        // Try .a-offscreen first (most reliable)
+        const apexOffscreen = apexContainer.find('.a-offscreen').first().text().trim();
+        if (apexOffscreen) {
+          price = apexOffscreen;
+          console.log(`✅ Found Amazon price from apexPriceToPay .a-offscreen: ${price}`);
+        } else {
+          // Fallback: combine whole + fraction from apexPriceToPay
+          const priceWhole = apexContainer.find('.a-price-whole').first().text().trim();
+          const priceFraction = apexContainer.find('.a-price-fraction').first().text().trim();
+          if (priceWhole) {
+            if (priceFraction) {
+              price = `₹${priceWhole}.${priceFraction}`;
+              console.log(`✅ Found Amazon price from apexPriceToPay (whole + fraction): ${price}`);
+            } else {
+              price = `₹${priceWhole}`;
+              console.log(`✅ Found Amazon price from apexPriceToPay (whole only): ${price}`);
+            }
+          }
         }
       }
       
-      // If we still don't have a price, try combining .a-price-whole with .a-price-fraction
-      // IMPORTANT: Only use this from apexPriceToPay container to avoid getting discounted prices
+      // If apexPriceToPay didn't work, try other selectors (but skip MRP selectors)
+      // IMPORTANT: Order matters - we want the final price customer pays, not MRP or list prices
       if (!price) {
-        console.log('   Trying to combine price-whole and price-fraction from apexPriceToPay...');
-        // First try to get price from apexPriceToPay container (final price)
+        const priceSelectors = [
+          '#corePriceDisplay_desktop_feature_div .a-price .a-offscreen',  // Desktop final price
+          '#corePrice_feature_div .a-price .a-offscreen',  // Alternative final price
+          '#priceblock_ourprice',  // Our price block (actual price)
+          '#priceblock_dealprice',  // Deal price block (actual price)
+          '#priceblock_buyingprice',  // Buying price (actual price)
+          '#priceblock_saleprice',  // Sale price (actual price)
+          '.a-price .a-offscreen',  // General price with offscreen (but not .a-text-price which is MRP)
+          '[data-a-color="price"] .a-offscreen',  // Price with data attribute
+          '.a-price[data-a-color="price"] .a-offscreen',  // Price with data attribute variant
+          '#price',  // Simple price ID
+          'span[data-a-color="price"]',  // Price span
+          '.a-size-medium.a-color-price',  // Medium size price
+        ];
+        
+        console.log(`   Trying ${priceSelectors.length} alternative price selectors...`);
+        for (const selector of priceSelectors) {
+          const priceElement = $(selector).first();
+          // Skip if it's a strikethrough price (MRP) - check parent for text-decoration
+          const parent = priceElement.parent();
+          const isStrikethrough = parent.css('text-decoration')?.includes('line-through') || 
+                                  parent.hasClass('a-text-strike') ||
+                                  priceElement.hasClass('a-text-strike') ||
+                                  parent.find('.a-text-strike').length > 0;
+          
+          if (isStrikethrough) {
+            console.log(`   ⚠️ Skipping MRP price from selector: ${selector}`);
+            continue;
+          }
+          
+          const priceText = priceElement.text().trim();
+          if (priceText && !priceText.includes('M.R.P')) {
+            price = priceText;
+            console.log(`✅ Found Amazon price with selector: ${selector} = ${priceText}`);
+            break;
+          }
+        }
+      }
+      
+      // Final fallback: If we still don't have a price, try combining .a-price-whole with .a-price-fraction
+      // IMPORTANT: Only use this from apexPriceToPay container to avoid getting MRP or discounted prices
+      if (!price) {
+        console.log('   Final fallback: Trying to combine price-whole and price-fraction...');
+        
+        // First try to get price from apexPriceToPay container (final price) - this is already done above, but double-check
         const apexContainer = $('.apexPriceToPay');
         if (apexContainer.length > 0) {
           const priceWhole = apexContainer.find('.a-price-whole').first().text().trim();
@@ -674,76 +709,123 @@ async function scrapeProduct(url, retryCount = 0) {
           
           if (priceWhole) {
             if (priceFraction) {
-              // Combine whole and fraction
               price = `₹${priceWhole}.${priceFraction}`;
               console.log(`✅ Found Amazon price by combining whole + fraction from apexPriceToPay: ${price}`);
             } else {
-              // Just use whole number
               price = `₹${priceWhole}`;
               console.log(`✅ Found Amazon price (whole only from apexPriceToPay): ${price}`);
             }
           }
         }
         
-        // If still no price, try from any .a-price container (but be careful - might be discounted)
+        // Last resort: Try from any .a-price container, but exclude strikethrough (MRP) prices
         if (!price) {
-          console.log('   Trying to combine price-whole and price-fraction from general container...');
-          const priceWhole = $('.a-price-whole').first().text().trim();
-          const priceFraction = $('.a-price-fraction').first().text().trim();
-          
-          if (priceWhole) {
-            if (priceFraction) {
-              // Combine whole and fraction
-              price = `₹${priceWhole}.${priceFraction}`;
-              console.log(`✅ Found Amazon price by combining whole + fraction: ${price}`);
-            } else {
-              // Just use whole number
-              price = `₹${priceWhole}`;
-              console.log(`✅ Found Amazon price (whole only): ${price}`);
+          console.log('   Last resort: Trying general .a-price container (excluding MRP)...');
+          const priceContainers = $('.a-price:not(.a-text-strike)');
+          for (let i = 0; i < Math.min(priceContainers.length, 5); i++) {
+            const container = $(priceContainers[i]);
+            // Skip if it's a strikethrough price
+            if (container.hasClass('a-text-strike') || container.find('.a-text-strike').length > 0) {
+              continue;
+            }
+            
+            const priceWhole = container.find('.a-price-whole').first().text().trim();
+            const priceFraction = container.find('.a-price-fraction').first().text().trim();
+            
+            if (priceWhole) {
+              if (priceFraction) {
+                price = `₹${priceWhole}.${priceFraction}`;
+                console.log(`✅ Found Amazon price by combining whole + fraction (container ${i}): ${price}`);
+                break;
+              } else {
+                price = `₹${priceWhole}`;
+                console.log(`✅ Found Amazon price (whole only, container ${i}): ${price}`);
+                break;
+              }
             }
           }
         }
       }
       
-      // Validate and correct price: Ensure we have the final price, not a discounted/variant price
+      // CRITICAL VALIDATION: Always prefer apexPriceToPay if it exists (it's the actual price to pay)
+      // This ensures we never use MRP or list prices when the actual price is available
+      const apexPriceElement = $('.apexPriceToPay .a-offscreen').first();
+      if (apexPriceElement.length > 0) {
+        const apexPriceText = apexPriceElement.text().trim();
+        if (apexPriceText) {
+          // Extract numeric values for comparison
+          const currentPriceMatch = price ? price.replace(/[₹,\s]/g, '').match(/(\d+)/) : null;
+          const apexPriceMatch = apexPriceText.replace(/[₹,\s]/g, '').match(/(\d+)/);
+          
+          if (apexPriceMatch) {
+            const apexNumericPrice = parseFloat(apexPriceMatch[1]);
+            
+            // If we have a current price, compare them
+            if (currentPriceMatch) {
+              const currentNumericPrice = parseFloat(currentPriceMatch[1]);
+              
+              // ALWAYS prefer apexPriceToPay if it's different (it's the actual selling price)
+              // apexPriceToPay is Amazon's official "price to pay" container
+              if (apexNumericPrice !== currentNumericPrice) {
+                console.log(`⚠️  Price mismatch detected: Current=${currentNumericPrice}, apexPriceToPay=${apexNumericPrice}`);
+                console.log(`✅ Using apexPriceToPay (actual price to pay): ${apexPriceText}`);
+                price = apexPriceText;
+              } else {
+                console.log(`✅ Price matches apexPriceToPay: ${price}`);
+              }
+            } else {
+              // No current price, use apexPriceToPay
+              price = apexPriceText;
+              console.log(`✅ Using apexPriceToPay as primary source: ${price}`);
+            }
+          }
+        } else {
+          // Try combining whole + fraction from apexPriceToPay
+          const apexContainer = $('.apexPriceToPay');
+          const priceWhole = apexContainer.find('.a-price-whole').first().text().trim();
+          const priceFraction = apexContainer.find('.a-price-fraction').first().text().trim();
+          if (priceWhole) {
+            if (priceFraction) {
+              price = `₹${priceWhole}.${priceFraction}`;
+              console.log(`✅ Using apexPriceToPay (combined whole + fraction): ${price}`);
+            } else {
+              price = `₹${priceWhole}`;
+              console.log(`✅ Using apexPriceToPay (whole only): ${price}`);
+            }
+          }
+        }
+      }
+      
+      // Additional validation: Check if current price might be MRP (strikethrough or list price)
       if (price) {
-        // Extract numeric value from price string
         const priceMatch = price.replace(/[₹,\s]/g, '').match(/(\d+)/);
         if (priceMatch) {
           const numericPrice = parseFloat(priceMatch[1]);
           
-          // Always try to get price from apexPriceToPay (final price to pay) as validation
-          // This ensures we're not getting a discounted price or variant
-          const apexPrice = $('.apexPriceToPay .a-offscreen').first().text().trim();
-          if (apexPrice) {
-            const apexPriceMatch = apexPrice.replace(/[₹,\s]/g, '').match(/(\d+)/);
-            if (apexPriceMatch) {
-              const apexNumericPrice = parseFloat(apexPriceMatch[1]);
-              
-              // If apexPriceToPay has a different (higher) price, use it instead
-              // This handles cases where we got a discounted price or variant
-              if (apexNumericPrice > numericPrice) {
-                console.log(`⚠️  Found higher price in apexPriceToPay (${apexNumericPrice} vs ${numericPrice}), using apexPriceToPay`);
-                price = apexPrice;
-                console.log(`✅ Using final price from apexPriceToPay: ${price}`);
-              } else if (apexNumericPrice < numericPrice) {
-                // If apexPriceToPay is lower, it might be the actual discounted price
-                // But we should prefer the higher one (original price) unless apexPriceToPay is the final price
-                console.log(`ℹ️  apexPriceToPay shows lower price (${apexNumericPrice}), keeping current price: ${price}`);
+          // Look for any strikethrough prices on the page that might be MRP
+          const strikethroughPrices = $('.a-text-strike .a-offscreen, .a-text-price.a-text-strike .a-offscreen');
+          if (strikethroughPrices.length > 0) {
+            // If we found a strikethrough price, make sure our current price is not it
+            strikethroughPrices.each(function() {
+              const strikePriceText = $(this).text().trim();
+              const strikePriceMatch = strikePriceText.replace(/[₹,\s]/g, '').match(/(\d+)/);
+              if (strikePriceMatch) {
+                const strikeNumericPrice = parseFloat(strikePriceMatch[1]);
+                // If current price matches a strikethrough price, it's likely MRP - try to find actual price
+                if (Math.abs(strikeNumericPrice - numericPrice) < 1) {
+                  console.log(`⚠️  Current price (${price}) appears to be MRP (strikethrough). Searching for actual price...`);
+                  // Try to find the actual price (usually right after or near the strikethrough)
+                  const actualPriceElement = $(this).closest('.a-section').find('.apexPriceToPay .a-offscreen, .a-price:not(.a-text-strike) .a-offscreen').first();
+                  if (actualPriceElement.length > 0) {
+                    const actualPriceText = actualPriceElement.text().trim();
+                    if (actualPriceText) {
+                      price = actualPriceText;
+                      console.log(`✅ Found actual price (not MRP): ${price}`);
+                    }
+                  }
+                }
               }
-            }
-          }
-          
-          // Also check if price seems suspiciously low (less than 100) - might be a discount amount
-          if (numericPrice < 100 && apexPrice) {
-            const apexPriceMatch = apexPrice.replace(/[₹,\s]/g, '').match(/(\d+)/);
-            if (apexPriceMatch) {
-              const apexNumericPrice = parseFloat(apexPriceMatch[1]);
-              if (apexNumericPrice >= 100) {
-                price = apexPrice;
-                console.log(`✅ Corrected suspiciously low price using apexPriceToPay: ${price}`);
-              }
-            }
+            });
           }
         }
       }
