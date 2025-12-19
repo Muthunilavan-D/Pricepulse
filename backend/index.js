@@ -1898,9 +1898,29 @@ app.get('/get-products', async (req, res) => {
     
     const products = snapshot.docs.map(doc => {
       const data = doc.data();
+      
+      // Debug: Log isBought value from Firestore
+      const rawIsBought = data.isBought;
+      // Explicitly convert to boolean - handle true, 'true', 1, or any truthy value
+      const isBoughtValue = rawIsBought === true || 
+                           rawIsBought === 'true' || 
+                           rawIsBought === 1 ||
+                           rawIsBought === '1' ||
+                           (typeof rawIsBought === 'boolean' && rawIsBought === true);
+      
+      // Always log isBought status for debugging
+      if (isBoughtValue) {
+        console.log(`✅ BOUGHT Product "${data.title?.substring(0, 30) ?? 'N/A'}": isBought = ${rawIsBought} (type: ${typeof rawIsBought})`);
+      }
+      
+      // Build product object, ensuring isBought is explicitly set
       const product = { 
-        id: doc.id, 
-        ...data,
+        id: doc.id,
+        url: data.url || '',
+        title: data.title || '',
+        price: data.price || '',
+        image: data.image || '',
+        lastChecked: data.lastChecked || '',
         priceHistory: data.priceHistory || [],
         thresholdPrice: data.thresholdPrice || null,
         thresholdReached: data.thresholdReached || false,
@@ -1908,8 +1928,8 @@ app.get('/get-products', async (req, res) => {
         notificationType: data.notificationType || null,
         notificationMessage: data.notificationMessage || null,
         notificationTimestamp: data.notificationTimestamp || null,
-        isBought: data.isBought || false, // Ensure isBought is always present
-        image: data.image || '' // Ensure image is always present
+        userId: data.userId || '',
+        isBought: isBoughtValue, // Explicitly set isBought as boolean
       };
       
       // Debug logging for Flipkart products
@@ -1921,6 +1941,18 @@ app.get('/get-products', async (req, res) => {
       
       return product;
     });
+    
+    // Debug: Count bought products and verify isBought field
+    const boughtCount = products.filter(p => p.isBought === true).length;
+    const notBoughtCount = products.filter(p => p.isBought !== true).length;
+    console.log(`📊 GET-PRODUCTS: Returning ${products.length} products`);
+    console.log(`   ✅ Bought: ${boughtCount}, ⏳ Tracking: ${notBoughtCount}`);
+    
+    // Verify all products have isBought field
+    const productsWithoutIsBought = products.filter(p => p.isBought === undefined).length;
+    if (productsWithoutIsBought > 0) {
+      console.warn(`⚠️  WARNING: ${productsWithoutIsBought} products missing isBought field!`);
+    }
     
     console.log(`✅ Returning ${products.length} products for userId: ${userId}`);
     res.json(products);
@@ -2288,7 +2320,7 @@ app.post('/mark-product-bought', async (req, res) => {
     
     // Mark product as bought instead of deleting
     await db.collection('products').doc(searchId).update({
-      isBought: true,
+      isBought: true, // Explicitly set as boolean true
       thresholdPrice: null, // Clear threshold when bought
       thresholdReached: false,
       hasNotification: false,
@@ -2297,7 +2329,11 @@ app.post('/mark-product-bought', async (req, res) => {
       notificationTimestamp: null,
     });
     
+    // Verify the update was successful
+    const updatedDoc = await db.collection('products').doc(searchId).get();
+    const updatedData = updatedDoc.data();
     console.log(`✅ Product marked as bought: "${productTitle}"`);
+    console.log(`   Verified isBought in Firestore: ${updatedData.isBought} (type: ${typeof updatedData.isBought})`);
     
     res.json({ 
       message: 'Product marked as bought',
