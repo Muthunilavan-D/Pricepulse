@@ -293,8 +293,9 @@ async function scrapeProduct(url, retryCount = 0) {
     console.log(`\n🔍 Starting scrape for URL: ${url}${retryCount > 0 ? ` (Retry ${retryCount}/${MAX_RETRIES})` : ''}`);
     
     // Add random delay before request (helps evade rate limiting)
+    // Reduced delay for faster response - mobile-first approach is less likely to trigger rate limits
     if (retryCount === 0) {
-      await randomDelay(1500, 2500);
+      await randomDelay(500, 1000);
     }
     
     // First, resolve shortened URLs (like dl.flipkart.com)
@@ -486,11 +487,12 @@ async function scrapeProduct(url, retryCount = 0) {
           console.log(`🔑 Found challenge ID: ${challengeId}`);
         }
         
-        // Strategy: Make a request to a clean product URL with cookies
+        // Strategy: Try mobile version first (works better), then desktop
         // This simulates clicking "Continue Shopping" and then accessing the product
         if (asin) {
-          const cleanProductUrl = `https://www.amazon.in/dp/${asin}`;
-          console.log(`🔄 Retrying with clean product URL and cookies: ${cleanProductUrl}`);
+          // Try mobile version first (more reliable)
+          const mobileUrl = `https://m.amazon.in/dp/${asin}`;
+          console.log(`🔄 Trying mobile version with cookies first: ${mobileUrl}`);
           
           // Set cookies in headers
           const cookieHeader = cookies.map(cookie => cookie.split(';')[0]).join('; ');
@@ -501,11 +503,11 @@ async function scrapeProduct(url, retryCount = 0) {
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
           };
           
-          // Add delay to simulate human behavior
-          await randomDelay(1500, 2500);
+          // Reduced delay for faster response
+          await randomDelay(500, 1000);
           
           try {
-            response = await axiosInstance.get(cleanProductUrl, {
+            response = await axiosInstance.get(mobileUrl, {
               headers: retryHeaders,
               maxRedirects: 10
             });
@@ -526,29 +528,44 @@ async function scrapeProduct(url, retryCount = 0) {
                                 newPageHtml.includes('continue shopping');
             
             if (!stillBlocked) {
-              console.log('✅ Successfully bypassed challenge with clean URL!');
+              console.log('✅ Successfully bypassed challenge with mobile URL!');
               // Use the new cheerio instance
               Object.assign($, $new);
             } else {
-              console.log('⚠️  Challenge still present, trying one more approach...');
+              console.log('⚠️  Challenge still present, trying desktop version...');
               
-              // Try mobile version with cookies
-              const mobileUrl = `https://m.amazon.in/dp/${asin}`;
-              console.log(`🔄 Trying mobile version with cookies: ${mobileUrl}`);
+              // Try desktop version with cookies as fallback
+              const cleanProductUrl = `https://www.amazon.in/dp/${asin}`;
+              console.log(`🔄 Trying desktop version with cookies: ${cleanProductUrl}`);
               
-              const mobileHeaders = {
-                ...headers,
-                'Cookie': cookieHeader,
-                'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36'
-              };
+              await randomDelay(500, 1000);
               
-              await randomDelay(1000, 2000);
-              response = await axiosInstance.get(mobileUrl, {
-                headers: mobileHeaders
-              });
-              
-              const $mobile = cheerio.load(response.data);
-              Object.assign($, $mobile);
+              try {
+                response = await axiosInstance.get(cleanProductUrl, {
+                  headers: retryHeaders,
+                  maxRedirects: 10
+                });
+                
+                // Update cookies from response
+                if (response.headers['set-cookie']) {
+                  cookies = [...cookies, ...response.headers['set-cookie']];
+                }
+                
+                const $desktop = cheerio.load(response.data);
+                const desktopPageHtml = $desktop.html().toLowerCase();
+                const desktopPageText = $desktop.text().toLowerCase();
+                
+                const stillBlockedDesktop = desktopPageHtml.includes('opfcaptcha') || 
+                                          desktopPageText.includes('click the button') ||
+                                          desktopPageHtml.includes('continue shopping');
+                
+                if (!stillBlockedDesktop) {
+                  console.log('✅ Successfully bypassed challenge with desktop URL!');
+                  Object.assign($, $desktop);
+                }
+              } catch (desktopError) {
+                console.warn('⚠️  Desktop retry also failed:', desktopError.message);
+              }
             }
           } catch (retryError) {
             console.warn('⚠️  Retry with cookies failed:', retryError.message);
@@ -1249,8 +1266,8 @@ async function scrapeProduct(url, retryCount = 0) {
         } else {
           console.log(`🔄 Retrying with mobile version (desktop failed)...`);
         }
-        // Add delay before retry to avoid rate limiting
-        await randomDelay(2000, 4000);
+        // Reduced delay for faster retries - mobile-first approach works better
+        await randomDelay(1000, 2000);
         return await scrapeProduct(url, retryCount + 1);
       }
       
