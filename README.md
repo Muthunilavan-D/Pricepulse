@@ -14,11 +14,13 @@ Price Pulse is a clean and modern **Flutter app** that helps users **track produ
 - Local Notifications
 
 ## 📸 Screenshots
+<p>
+  <img src="assets/Splash.jpg" alt="Splash" width="250"/>
+  <img src="assets/Profile.jpg" alt="Profile" width="250"/>
+  <img src="assets/Add.jpg" alt="Add" width="250"/>
+  <img src="assets/Product.jpg" alt="Product" width="250"/>
+</p>
 
-![Splash](assets/Splash.jpg)
-![Profile](assets/Profile.jpg)
-![Add](assets/Add.jpg)
-![Product](assets/Product.jpg)
 
 
 
