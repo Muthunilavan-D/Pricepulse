@@ -261,11 +261,41 @@ function normalizeUrl(url) {
   }
 }
 
+// Helper function to get random user agent (rotates to avoid detection)
+function getRandomUserAgent() {
+  const userAgents = [
+    // Desktop Chrome (latest)
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    // Desktop Chrome (slightly older)
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+    // Desktop Firefox
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0',
+    // Mobile Chrome (Android)
+    'Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
+    // Mobile Safari (iOS)
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+    // Desktop Edge
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0'
+  ];
+  return userAgents[Math.floor(Math.random() * userAgents.length)];
+}
+
+// Helper function to add random delay (evades rate limiting)
+function randomDelay(min = 1000, max = 3000) {
+  const delay = Math.floor(Math.random() * (max - min + 1)) + min;
+  return new Promise(resolve => setTimeout(resolve, delay));
+}
+
 // Helper function to scrape product
 const MAX_RETRIES = 2;
 async function scrapeProduct(url, retryCount = 0) {
   try {
     console.log(`\n🔍 Starting scrape for URL: ${url}${retryCount > 0 ? ` (Retry ${retryCount}/${MAX_RETRIES})` : ''}`);
+    
+    // Add random delay before request (helps evade rate limiting)
+    if (retryCount === 0) {
+      await randomDelay(1500, 2500);
+    }
     
     // First, resolve shortened URLs (like dl.flipkart.com)
     const resolvedUrl = await resolveShortUrl(url);
@@ -275,32 +305,48 @@ async function scrapeProduct(url, retryCount = 0) {
     let normalizedUrl = normalizeUrl(resolvedUrl);
     console.log(`🔧 Normalized URL: ${normalizedUrl}`);
     
-    // On retry, try mobile version if it's Amazon
-    if (retryCount > 0 && normalizedUrl.includes('amazon.in')) {
-      normalizedUrl = normalizedUrl.replace('www.amazon.in', 'm.amazon.in');
-      console.log(`📱 Retrying with mobile version: ${normalizedUrl}`);
+    // Strategy: Try mobile version first for Amazon (less likely to show CAPTCHA)
+    // If that fails, retry with desktop version
+    const isAmazonUrl = normalizedUrl.includes('amazon.in') || normalizedUrl.includes('amazon.com');
+    if (isAmazonUrl) {
+      // First attempt: try mobile version (less bot detection)
+      if (retryCount === 0 && !normalizedUrl.includes('m.amazon')) {
+        normalizedUrl = normalizedUrl.replace(/www\.amazon\.(in|com)/, 'm.amazon.$1');
+        console.log(`📱 Using mobile version first (less bot detection): ${normalizedUrl}`);
+      }
+      // Second attempt: try desktop version if mobile failed
+      else if (retryCount === 1 && normalizedUrl.includes('m.amazon')) {
+        normalizedUrl = normalizedUrl.replace(/m\.amazon\.(in|com)/, 'www.amazon.$1');
+        console.log(`🖥️  Retrying with desktop version: ${normalizedUrl}`);
+      }
     }
     
     console.log(`🌐 Final URL to scrape: ${normalizedUrl}`);
 
+    // Rotate user agent for each request
+    const userAgent = getRandomUserAgent();
+    console.log(`🔄 Using User-Agent: ${userAgent.substring(0, 50)}...`);
+
     // Enhanced headers to mimic a real browser (more realistic)
+    // Use mobile headers if using mobile URL
+    const isMobileUrl = normalizedUrl.includes('m.amazon');
     const headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      'User-Agent': userAgent,
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-      'Accept-Language': 'en-IN,en-US;q=0.9,en;q=0.8',
-      'Accept-Encoding': 'gzip, deflate, br, zstd',
+      'Accept-Language': isMobileUrl ? 'en-IN,en;q=0.9' : 'en-IN,en-US;q=0.9,en;q=0.8',
+      'Accept-Encoding': 'gzip, deflate, br',
       'Connection': 'keep-alive',
       'Upgrade-Insecure-Requests': '1',
       'Sec-Fetch-Dest': 'document',
       'Sec-Fetch-Mode': 'navigate',
-      'Sec-Fetch-Site': 'none',
+      'Sec-Fetch-Site': isMobileUrl ? 'none' : 'none',
       'Sec-Fetch-User': '?1',
       'Cache-Control': 'max-age=0',
       'Referer': 'https://www.google.com/',
       'DNT': '1',
-      'sec-ch-ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-      'sec-ch-ua-mobile': '?0',
-      'sec-ch-ua-platform': '"Windows"'
+      'sec-ch-ua': isMobileUrl ? '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"' : '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+      'sec-ch-ua-mobile': isMobileUrl ? '?1' : '?0',
+      'sec-ch-ua-platform': isMobileUrl ? '"Android"' : '"Windows"'
     };
 
     let response;
@@ -328,18 +374,51 @@ async function scrapeProduct(url, retryCount = 0) {
 
     const $ = cheerio.load(response.data);
     
-    // Check if page is blocked or requires CAPTCHA (but don't fail immediately - try to extract data first)
+    // Enhanced CAPTCHA detection - check for multiple indicators
     const pageHtml = $.html().toLowerCase();
     const pageText = $.text().toLowerCase();
-    const isBlocked = pageHtml.includes('captcha') || 
-                     pageHtml.includes('robot') || 
-                     pageHtml.includes('sorry, we just need to make sure') ||
-                     pageText.includes('sorry, we just need to make sure') ||
-                     pageText.includes('enter the characters you see');
+    const responseText = response.data.toString().toLowerCase();
     
-    if (isBlocked) {
-      console.warn('⚠️  Page may be blocked or require CAPTCHA, but attempting to extract data anyway...');
-      // Don't throw error immediately - try to extract data first
+    const captchaIndicators = [
+      'captcha',
+      'robot',
+      'sorry, we just need to make sure',
+      'enter the characters you see',
+      'click the button',
+      'opfcaptcha',
+      'amazon captcha',
+      'try a different image',
+      'automated access',
+      'unusual traffic',
+      'verify you are human'
+    ];
+    
+    const isBlocked = captchaIndicators.some(indicator => 
+      pageHtml.includes(indicator) || 
+      pageText.includes(indicator) ||
+      responseText.includes(indicator)
+    );
+    
+    // Check for specific Amazon CAPTCHA elements
+    const hasCaptchaElement = $('#captchacharacters').length > 0 || 
+                             $('[id*="captcha"]').length > 0 ||
+                             $('[class*="captcha"]').length > 0 ||
+                             pageHtml.includes('opfcaptcha.amazon.in');
+    
+    if (isBlocked || hasCaptchaElement) {
+      console.warn('⚠️  Page appears to be blocked or requires CAPTCHA');
+      
+      // If it's Amazon and we haven't tried mobile yet, retry with mobile
+      if (isAmazonUrl && retryCount === 0 && !normalizedUrl.includes('m.amazon')) {
+        console.log('🔄 CAPTCHA detected, will retry with mobile version...');
+        // Will retry below
+      } else if (retryCount < MAX_RETRIES) {
+        // Try one more time with different approach
+        console.log('🔄 Retrying after CAPTCHA detection...');
+      } else {
+        // Final attempt - try to extract anyway in case CAPTCHA is just a warning
+        console.warn('⚠️  CAPTCHA detected but attempting to extract data anyway...');
+      }
     }
     let price = null;
     let title = null;
@@ -993,8 +1072,14 @@ async function scrapeProduct(url, retryCount = 0) {
       }
       
       // Retry with mobile version if we haven't already
-      if (retryCount < MAX_RETRIES && normalizedUrl.includes('amazon.in') && !normalizedUrl.includes('m.amazon.in')) {
+      const shouldRetryMobile = retryCount < MAX_RETRIES && 
+                               (normalizedUrl.includes('amazon.in') || normalizedUrl.includes('amazon.com')) && 
+                               !normalizedUrl.includes('m.amazon');
+      
+      if (shouldRetryMobile) {
         console.log(`🔄 Retrying with mobile version...`);
+        // Add delay before retry to avoid rate limiting
+        await randomDelay(2000, 4000);
         return await scrapeProduct(url, retryCount + 1);
       }
       

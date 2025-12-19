@@ -220,13 +220,34 @@ Both Render and Railway automatically redeploy when you push to GitHub:
 
 You can use [cron-job.org](https://cron-job.org) to ping your `/background-check` endpoint:
 
-1. Create account on cron-job.org
-2. Create new cron job:
-   - **URL**: `https://your-backend-url.onrender.com/background-check?apiKey=YOUR_API_KEY`
-   - **Schedule**: Every hour (or as needed)
-   - **Request Method**: GET
+1. Create account on [cron-job.org](https://cron-job.org)
+2. Click **"Create cronjob"**
+3. Configure the cron job:
+   - **Title**: `PricePulse Background Check`
+   - **Address (URL)**: `https://price-pulse-backend-1mtr.onrender.com/background-check?apiKey=2IcwKctWD2JzIqbPxHhcDN68fxDcxXpCLFLdUQKYbf0=`
+   - **Schedule**: 
+     - **Every**: `1 hour` (recommended for price checks)
+     - Or `30 minutes` for more frequent checks
+   - **Request Method**: `GET`
+   - **Save**: Click "Create cronjob"
 
-This will keep your Render service awake and check prices automatically.
+**Important Notes:**
+- This cron job does TWO things:
+  1. **Keeps your Render service awake** (prevents 15-minute sleep timeout)
+  2. **Automatically checks all product prices** and sends notifications
+
+- **Recommended Schedule:**
+  - **Every 1 hour**: Good balance between keeping service awake and checking prices
+  - **Every 10 minutes**: More frequent, but uses more resources
+  - **Every 30 minutes**: Good middle ground
+
+- **API Key**: The API key in the URL (`2IcwKctWD2JzIqbPxHhcDN68fxDcxXpCLFLdUQKYbf0=`) is already configured in your backend code. Keep it secure!
+
+**Alternative: Keep-Alive Only**
+If you want a separate keep-alive ping (lighter, doesn't check prices), you can create another cron job:
+- **URL**: `https://price-pulse-backend-1mtr.onrender.com/`
+- **Schedule**: Every 10 minutes
+- This just pings the root endpoint to keep the service awake
 
 ---
 
