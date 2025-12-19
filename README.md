@@ -14,10 +14,18 @@ Price Pulse is a clean and modern **Flutter app** that helps users **track produ
 - Local Notifications
 
 ## 📸 Screenshots
-![alt text](Screenshot_2025-12-19-19-49-52-20_e6b8a6b317b48fa064f9b7cf173c1a81-1.jpg)
-![alt text](Screenshot_2025-12-19-19-48-11-53_e6b8a6b317b48fa064f9b7cf173c1a81-1.jpg) 
-![alt text](Screenshot_2025-12-19-19-48-16-52_e6b8a6b317b48fa064f9b7cf173c1a81-1.jpg)
-![alt text](Screenshot_2025-12-19-19-48-36-73_e6b8a6b317b48fa064f9b7cf173c1a81-1.jpg)
+<p>
+  <img src="assets/Splash.jpg" alt="Splash" width="230"/>
+  <img src="assets/Profile.jpg" alt="Profile" width="230"/>
+  <img src="assets/Product.jpg" alt="Product" width="230"/>
+  <img src="assets/Add.jpg" alt="Add" width="230"/>
+</p>
+
+
+[![GitHub release](https://img.shields.io/github/v/release/Muthunilavan-D/Pricepulse)](https://github.com/Muthunilavan-D/Pricepulse/releases)
+
+## 📥 Download APK
+[⬇️ Download Latest APK](https://github.com/Muthunilavan-D/Pricepulse/releases/latest/download/app-release.apk)
 
 
 ## 🚀 Run Locally
