@@ -368,14 +368,25 @@ async function scrapeProduct(url, retryCount = 0) {
       'sec-ch-ua-platform': isMobileUrl ? '"Android"' : '"Windows"'
     };
 
+    // Create axios instance with cookie support
+    const axiosInstance = axios.create({
+      timeout: 20000,
+      maxRedirects: 5,
+      validateStatus: (status) => status >= 200 && status < 500,
+      headers: headers
+    });
+
     let response;
+    let cookies = []; // Track cookies for challenge handling
+    
     try {
-      response = await axios.get(normalizedUrl, {
-        headers: headers,
-        timeout: 20000,
-        maxRedirects: 5,
-        validateStatus: (status) => status >= 200 && status < 500
-      });
+      response = await axiosInstance.get(normalizedUrl);
+      
+      // Extract cookies from response headers
+      if (response.headers['set-cookie']) {
+        cookies = response.headers['set-cookie'];
+        console.log(`🍪 Received ${cookies.length} cookies`);
+      }
     } catch (requestError) {
       console.error('❌ Request failed:', requestError.message);
       if (requestError.response) {
@@ -401,7 +412,7 @@ async function scrapeProduct(url, retryCount = 0) {
 
     const $ = cheerio.load(response.data);
     
-    // Enhanced CAPTCHA detection - check for multiple indicators
+    // Enhanced CAPTCHA/challenge detection - check for multiple indicators
     const pageHtml = $.html().toLowerCase();
     const pageText = $.text().toLowerCase();
     const responseText = response.data.toString().toLowerCase();
@@ -417,7 +428,8 @@ async function scrapeProduct(url, retryCount = 0) {
       'try a different image',
       'automated access',
       'unusual traffic',
-      'verify you are human'
+      'verify you are human',
+      'continue shopping' // Amazon's challenge button
     ];
     
     const isBlocked = captchaIndicators.some(indicator => 
@@ -426,23 +438,140 @@ async function scrapeProduct(url, retryCount = 0) {
       responseText.includes(indicator)
     );
     
-    // Check for specific Amazon CAPTCHA elements
+    // Check for specific Amazon CAPTCHA/challenge elements
     const hasCaptchaElement = $('#captchacharacters').length > 0 || 
                              $('[id*="captcha"]').length > 0 ||
                              $('[class*="captcha"]').length > 0 ||
                              pageHtml.includes('opfcaptcha.amazon.in');
     
-    if (isBlocked || hasCaptchaElement) {
-      console.warn('⚠️  Page appears to be blocked or requires CAPTCHA');
-      console.warn(`   isBlocked: ${isBlocked}, hasCaptchaElement: ${hasCaptchaElement}`);
+    // Check for "Continue Shopping" button (Amazon's challenge)
+    const hasContinueButton = $('a:contains("Continue Shopping"), button:contains("Continue Shopping"), input[value*="Continue"]').length > 0 ||
+                              pageText.includes('continue shopping') ||
+                              $('form[action*="captcha"]').length > 0;
+    
+    // Try to handle Amazon's "Continue Shopping" challenge
+    if (isAmazonUrl && (hasContinueButton || pageHtml.includes('opfcaptcha'))) {
+      console.log('🔓 Detected Amazon challenge page, attempting to bypass...');
       
-      // Log more details about what was detected
-      if (isBlocked) {
-        const detectedIndicators = captchaIndicators.filter(indicator => 
-          pageHtml.includes(indicator) || pageText.includes(indicator) || responseText.includes(indicator)
-        );
-        console.warn(`   Detected indicators: ${detectedIndicators.join(', ')}`);
+      try {
+        // Look for the challenge form or button
+        const challengeForm = $('form[action*="captcha"], form[action*="validate"]');
+        const challengeLink = $('a[href*="captcha"], a[href*="validate"], a:contains("Continue")');
+        
+        let challengeUrl = null;
+        
+        if (challengeForm.length > 0) {
+          const formAction = challengeForm.attr('action');
+          if (formAction) {
+            challengeUrl = formAction.startsWith('http') ? formAction : `https://www.amazon.in${formAction}`;
+            console.log(`📋 Found challenge form action: ${challengeUrl}`);
+          }
+        } else if (challengeLink.length > 0) {
+          const linkHref = challengeLink.first().attr('href');
+          if (linkHref) {
+            challengeUrl = linkHref.startsWith('http') ? linkHref : `https://www.amazon.in${linkHref}`;
+            console.log(`🔗 Found challenge link: ${challengeUrl}`);
+          }
+        }
+        
+        // Extract challenge parameters from the page
+        const challengeIdMatch = responseText.match(/ue_id\s*=\s*['"]([^'"]+)['"]/);
+        const challengeId = challengeIdMatch ? challengeIdMatch[1] : null;
+        
+        // Try to find the actual product URL (ASIN) to retry with
+        const asinMatch = normalizedUrl.match(/\/dp\/([A-Z0-9]{10})/);
+        const asin = asinMatch ? asinMatch[1] : null;
+        
+        if (challengeId) {
+          console.log(`🔑 Found challenge ID: ${challengeId}`);
+        }
+        
+        // Strategy: Make a request to a clean product URL with cookies
+        // This simulates clicking "Continue Shopping" and then accessing the product
+        if (asin) {
+          const cleanProductUrl = `https://www.amazon.in/dp/${asin}`;
+          console.log(`🔄 Retrying with clean product URL and cookies: ${cleanProductUrl}`);
+          
+          // Set cookies in headers
+          const cookieHeader = cookies.map(cookie => cookie.split(';')[0]).join('; ');
+          const retryHeaders = {
+            ...headers,
+            'Cookie': cookieHeader,
+            'Referer': normalizedUrl,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+          };
+          
+          // Add delay to simulate human behavior
+          await randomDelay(1500, 2500);
+          
+          try {
+            response = await axiosInstance.get(cleanProductUrl, {
+              headers: retryHeaders,
+              maxRedirects: 10
+            });
+            
+            // Update cookies from response
+            if (response.headers['set-cookie']) {
+              cookies = [...cookies, ...response.headers['set-cookie']];
+            }
+            
+            // Reload cheerio with new response
+            const $new = cheerio.load(response.data);
+            const newPageHtml = $new.html().toLowerCase();
+            const newPageText = $new.text().toLowerCase();
+            
+            // Check if we got past the challenge
+            const stillBlocked = newPageHtml.includes('opfcaptcha') || 
+                                newPageText.includes('click the button') ||
+                                newPageHtml.includes('continue shopping');
+            
+            if (!stillBlocked) {
+              console.log('✅ Successfully bypassed challenge with clean URL!');
+              // Use the new cheerio instance
+              Object.assign($, $new);
+            } else {
+              console.log('⚠️  Challenge still present, trying one more approach...');
+              
+              // Try mobile version with cookies
+              const mobileUrl = `https://m.amazon.in/dp/${asin}`;
+              console.log(`🔄 Trying mobile version with cookies: ${mobileUrl}`);
+              
+              const mobileHeaders = {
+                ...headers,
+                'Cookie': cookieHeader,
+                'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36'
+              };
+              
+              await randomDelay(1000, 2000);
+              response = await axiosInstance.get(mobileUrl, {
+                headers: mobileHeaders
+              });
+              
+              const $mobile = cheerio.load(response.data);
+              Object.assign($, $mobile);
+            }
+          } catch (retryError) {
+            console.warn('⚠️  Retry with cookies failed:', retryError.message);
+            // Continue with original response
+          }
+        } else {
+          console.log('⚠️  Could not extract ASIN, cannot retry with clean URL');
+        }
+      } catch (challengeError) {
+        console.warn('⚠️  Challenge bypass failed:', challengeError.message);
+        // Continue with original response
       }
+    }
+    
+    // Re-check for blocking after challenge handling
+    const finalPageHtml = $.html().toLowerCase();
+    const finalPageText = $.text().toLowerCase();
+    const finalIsBlocked = captchaIndicators.some(indicator => 
+      finalPageHtml.includes(indicator) || finalPageText.includes(indicator)
+    );
+    
+    if (finalIsBlocked && !hasContinueButton) {
+      console.warn('⚠️  Page still appears to be blocked after challenge handling');
       
       // If it's Amazon and we haven't tried desktop yet (we tried mobile first), retry with desktop
       if (isAmazonUrl && retryCount === 0 && normalizedUrl.includes('m.amazon')) {
