@@ -293,9 +293,9 @@ async function scrapeProduct(url, retryCount = 0) {
     console.log(`\n🔍 Starting scrape for URL: ${url}${retryCount > 0 ? ` (Retry ${retryCount}/${MAX_RETRIES})` : ''}`);
     
     // Add random delay before request (helps evade rate limiting)
-    // Reduced delay for faster response - mobile-first approach is less likely to trigger rate limits
+    // For first attempt, add slightly longer delay to establish session properly
     if (retryCount === 0) {
-      await randomDelay(500, 1000);
+      await randomDelay(1000, 1500);
     }
     
     // First, resolve shortened URLs (like dl.flipkart.com)
@@ -371,24 +371,51 @@ async function scrapeProduct(url, retryCount = 0) {
       'sec-ch-ua-platform': isMobileUrl ? '"Android"' : '"Windows"'
     };
 
-    // Create axios instance with cookie support
+    // Create axios instance with cookie support and cookie jar for persistence
     const axiosInstance = axios.create({
-      timeout: 20000,
-      maxRedirects: 5,
+      timeout: 25000, // Increased timeout for first request
+      maxRedirects: 10, // Allow more redirects for challenge flow
       validateStatus: (status) => status >= 200 && status < 500,
-      headers: headers
+      headers: headers,
+      // Enable cookie jar to persist cookies across requests
+      withCredentials: true
     });
 
     let response;
     let cookies = []; // Track cookies for challenge handling
     
     try {
-      response = await axiosInstance.get(normalizedUrl);
+      // For first attempt, make a pre-request to establish session (helps with first-time success)
+      if (retryCount === 0 && isAmazonUrl) {
+        try {
+          console.log('🔧 Making pre-request to establish session...');
+          const preResponse = await axiosInstance.get('https://www.amazon.in/', {
+            timeout: 10000,
+            maxRedirects: 5
+          });
+          // Extract initial cookies
+          if (preResponse.headers['set-cookie']) {
+            cookies = [...cookies, ...preResponse.headers['set-cookie']];
+            // Set cookies in headers for subsequent request
+            const cookieHeader = cookies.map(cookie => cookie.split(';')[0]).join('; ');
+            headers['Cookie'] = cookieHeader;
+            console.log(`🍪 Established session with ${cookies.length} cookies`);
+            // Small delay after pre-request
+            await randomDelay(500, 800);
+          }
+        } catch (preError) {
+          console.log('⚠️  Pre-request failed, continuing anyway:', preError.message);
+        }
+      }
+      
+      response = await axiosInstance.get(normalizedUrl, {
+        headers: headers
+      });
       
       // Extract cookies from response headers
       if (response.headers['set-cookie']) {
-        cookies = response.headers['set-cookie'];
-        console.log(`🍪 Received ${cookies.length} cookies`);
+        cookies = [...cookies, ...response.headers['set-cookie']];
+        console.log(`🍪 Received ${response.headers['set-cookie'].length} additional cookies (total: ${cookies.length})`);
       }
     } catch (requestError) {
       console.error('❌ Request failed:', requestError.message);
@@ -508,8 +535,8 @@ async function scrapeProduct(url, retryCount = 0) {
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
           };
           
-          // Reduced delay for faster response
-          await randomDelay(500, 1000);
+          // Delay before retry to ensure cookies are processed properly
+          await randomDelay(800, 1200);
           
           try {
             response = await axiosInstance.get(mobileUrl, {
@@ -548,7 +575,7 @@ async function scrapeProduct(url, retryCount = 0) {
               const cleanProductUrl = `https://www.amazon.in/dp/${asin}`;
               console.log(`🔄 Trying desktop version with cookies: ${cleanProductUrl}`);
               
-              await randomDelay(500, 1000);
+              await randomDelay(800, 1200);
               
               try {
                 response = await axiosInstance.get(cleanProductUrl, {
@@ -974,29 +1001,40 @@ async function scrapeProduct(url, retryCount = 0) {
         }
       }
 
-      // Try multiple title selectors
+      // Try multiple title selectors (prioritize most reliable ones)
+      // IMPORTANT: Order matters - avoid generic selectors that might get wrong text
       const titleSelectors = [
-        '#productTitle',
-        'h1.a-size-large',
-        'h1[data-automation-id="title"]',
-        '.product-title',
-        'h1 span',
-        '#title',
-        'h1.a-size-base-plus',
-        'span#productTitle'
+        '#productTitle',  // Most reliable - Amazon's main product title ID
+        'span#productTitle',  // Alternative productTitle selector
+        'h1.a-size-large span.a-size-large',  // Desktop large title
+        'h1.a-size-large',  // Desktop large title (without span)
+        'h1[data-automation-id="title"]',  // Automation ID selector
+        '#title',  // Simple title ID
+        'h1.a-size-base-plus',  // Base plus size
+        // Avoid generic 'h1 span' and '.product-title' as they might get wrong elements
       ];
       
       console.log(`   Trying ${titleSelectors.length} title selectors...`);
       for (const selector of titleSelectors) {
-        const titleText = $(selector).text().trim();
-        if (titleText) {
+        const titleElement = $(selector).first();
+        const titleText = titleElement.text().trim();
+        
+        // Validate title text - should be substantial and not generic
+        if (titleText && 
+            titleText.length > 10 && // At least 10 characters
+            !titleText.toLowerCase().includes('product gallery') && // Not gallery text
+            !titleText.toLowerCase().includes('image') && // Not image text
+            !titleText.toLowerCase().includes('view') && // Not view text
+            titleText.length < 500) { // Not too long (might be wrong element)
           title = titleText;
-          console.log(`✅ Found Amazon title with selector: ${selector}`);
+          console.log(`✅ Found Amazon title with selector: ${selector} = ${titleText.substring(0, 50)}...`);
           break;
+        } else if (titleText) {
+          console.log(`   ⚠️  Skipping invalid title from ${selector}: "${titleText.substring(0, 30)}"`);
         }
       }
 
-      // Fallback: Try JSON-LD for title
+      // Fallback: Try JSON-LD for title (most reliable source)
       if (!title) {
         console.log('   Trying JSON-LD for title...');
         try {
@@ -1004,10 +1042,37 @@ async function scrapeProduct(url, retryCount = 0) {
           for (let i = 0; i < jsonLdScripts.length; i++) {
             try {
               const jsonData = JSON.parse($(jsonLdScripts[i]).html());
+              
+              // Check for name field (most common)
               if (jsonData.name) {
-                title = jsonData.name;
-                console.log(`✅ Found title in JSON-LD: ${title.substring(0, 50)}...`);
-                break;
+                const jsonTitle = jsonData.name.trim();
+                // Validate JSON-LD title
+                if (jsonTitle && 
+                    jsonTitle.length > 10 && 
+                    !jsonTitle.toLowerCase().includes('product gallery') &&
+                    jsonTitle.length < 500) {
+                  title = jsonTitle;
+                  console.log(`✅ Found title in JSON-LD: ${title.substring(0, 50)}...`);
+                  break;
+                }
+              }
+              
+              // Also check for @graph array (common in Amazon)
+              if (jsonData['@graph'] && Array.isArray(jsonData['@graph'])) {
+                for (const item of jsonData['@graph']) {
+                  if (item['@type'] === 'Product' && item.name) {
+                    const jsonTitle = item.name.trim();
+                    if (jsonTitle && 
+                        jsonTitle.length > 10 && 
+                        !jsonTitle.toLowerCase().includes('product gallery') &&
+                        jsonTitle.length < 500) {
+                      title = jsonTitle;
+                      console.log(`✅ Found title in JSON-LD @graph: ${title.substring(0, 50)}...`);
+                      break;
+                    }
+                  }
+                }
+                if (title) break;
               }
             } catch (parseError) {
               continue;
@@ -1015,6 +1080,31 @@ async function scrapeProduct(url, retryCount = 0) {
           }
         } catch (jsonError) {
           console.log(`   JSON-LD title extraction failed: ${jsonError.message}`);
+        }
+      }
+      
+      // Final validation: Ensure title is valid
+      if (title) {
+        // Clean up title - remove extra whitespace and validate
+        title = title.replace(/\s+/g, ' ').trim();
+        
+        // If title is still suspicious, try to get from page title as last resort
+        if (title.length < 10 || 
+            title.toLowerCase().includes('product gallery') ||
+            title.toLowerCase().includes('amazon.in')) {
+          console.log(`⚠️  Title seems invalid: "${title}", trying page title...`);
+          const pageTitle = $('title').text().trim();
+          if (pageTitle && 
+              !pageTitle.toLowerCase().includes('amazon.in') &&
+              pageTitle.length > 10 &&
+              pageTitle.length < 200) {
+            // Extract product name from page title (usually "Product Name : Amazon.in")
+            const titleMatch = pageTitle.match(/^(.+?)\s*[:|]\s*Amazon/i);
+            if (titleMatch && titleMatch[1]) {
+              title = titleMatch[1].trim();
+              console.log(`✅ Using title from page title: ${title.substring(0, 50)}...`);
+            }
+          }
         }
       }
 
