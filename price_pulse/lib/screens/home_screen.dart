@@ -12,6 +12,7 @@ import 'add_product_screen.dart';
 import 'notifications_screen.dart';
 import '../widgets/glass_snackbar.dart';
 import 'profile_screen.dart';
+import '../widgets/skeleton_loader.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({Key? key}) : super(key: key);
@@ -177,9 +178,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
       if (!mounted) return;
 
+      // Filter out bought products from main view (they should only appear in profile stats)
+      final activeProducts = products.where((p) => p['isBought'] != true).toList();
+
       // Update products first to show UI immediately
       setState(() {
-        _products = products;
+        _products = activeProducts;
       });
       _applyFilters();
 
@@ -927,6 +931,37 @@ class _HomeScreenState extends State<HomeScreen> {
           extendBodyBehindAppBar: false,
           floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
           appBar: GlassAppBar(
+            leading: _isSelectionMode
+                ? _GlassAppBarIconButton(
+                    icon: Icons.close_rounded,
+                    onPressed: () {
+                      setState(() {
+                        _isSelectionMode = false;
+                        _selectedProductIds.clear();
+                      });
+                    },
+                    tooltip: 'Cancel Selection',
+                  )
+                : _GlassAppBarIconButton(
+                    icon: Icons.account_circle_rounded,
+                    onPressed: () async {
+                      // Navigate to profile screen
+                      await Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => ProfileScreen(),
+                        ),
+                      );
+                      // Reload products when returning from profile
+                      // This ensures home screen reflects any changes (like products marked as bought)
+                      if (mounted) {
+                        _fetchProducts().catchError((e) {
+                          print('Error reloading products: $e');
+                        });
+                      }
+                    },
+                    tooltip: 'Profile',
+                  ),
             title: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               mainAxisSize: MainAxisSize.min,
@@ -975,18 +1010,13 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
             actions: [
-              if (_isSelectionMode)
+              if (_isSelectionMode && _selectedProductIds.isNotEmpty)
                 _GlassAppBarIconButton(
-                  icon: Icons.close_rounded,
-                  onPressed: () {
-                    setState(() {
-                      _isSelectionMode = false;
-                      _selectedProductIds.clear();
-                    });
-                  },
-                  tooltip: 'Cancel Selection',
+                  icon: Icons.delete_outline_rounded,
+                  onPressed: _bulkDelete,
+                  tooltip: 'Delete Selected',
                 )
-              else ...[
+              else if (!_isSelectionMode) ...[
                 // Refresh button
                 _GlassAppBarIconButton(
                   icon: Icons.refresh_rounded,
@@ -1027,56 +1057,12 @@ class _HomeScreenState extends State<HomeScreen> {
                             : '$_unreadNotificationCount'
                       : null,
                 ),
-                // Profile screen navigation
-                _GlassAppBarIconButton(
-                  icon: Icons.account_circle_rounded,
-                  onPressed: () async {
-                    await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const ProfileScreen(),
-                      ),
-                    );
-                    // Reload products when returning from profile (if needed)
-                    if (mounted) {
-                      _fetchProducts().catchError((e) {
-                        print('Error reloading products: $e');
-                      });
-                    }
-                  },
-                  tooltip: 'Profile',
-                ),
               ],
-              if (_isSelectionMode && _selectedProductIds.isNotEmpty)
-                _GlassAppBarIconButton(
-                  icon: Icons.delete_outline_rounded,
-                  onPressed: _bulkDelete,
-                  tooltip: 'Delete Selected',
-                ),
             ],
           ),
           body: SafeArea(
             child: _isLoading
-                ? Center(
-                    child: GlassContainer(
-                      padding: const EdgeInsets.all(24),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          CircularProgressIndicator(
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                              AppTheme.accentBlue,
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          Text(
-                            'Loading products...',
-                            style: Theme.of(context).textTheme.bodyMedium,
-                          ),
-                        ],
-                      ),
-                    ),
-                  )
+                ? const HomeScreenSkeleton(itemCount: 3)
                 : _products.isEmpty
                 ? Center(
                     child: Padding(

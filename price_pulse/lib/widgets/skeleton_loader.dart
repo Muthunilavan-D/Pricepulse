@@ -246,4 +246,267 @@ class SearchBarSkeleton extends StatelessWidget {
   }
 }
 
+// Profile Screen Skeleton
+class ProfileScreenSkeleton extends StatelessWidget {
+  const ProfileScreenSkeleton({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Profile Header Skeleton
+            GlassContainer(
+              padding: const EdgeInsets.all(24),
+              borderRadius: 20,
+              child: Column(
+                children: [
+                  // Avatar Skeleton
+                  ShimmerEffect(
+                    baseColor: AppTheme.secondaryDark.withOpacity(0.5),
+                    highlightColor: AppTheme.secondaryDark.withOpacity(0.8),
+                    child: Container(
+                      width: 120,
+                      height: 120,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: AppTheme.secondaryDark.withOpacity(0.6),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  // Username Skeleton
+                  SkeletonBox(
+                    width: 150,
+                    height: 24,
+                    borderRadius: 8,
+                  ),
+                  const SizedBox(height: 8),
+                  SkeletonBox(
+                    width: 200,
+                    height: 14,
+                    borderRadius: 4,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            // Statistics Skeleton
+            GlassContainer(
+              padding: const EdgeInsets.all(20),
+              borderRadius: 20,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SkeletonBox(
+                    width: 100,
+                    height: 18,
+                    borderRadius: 4,
+                  ),
+                  const SizedBox(height: 16),
+                  // Stat items
+                  ...List.generate(3, (index) => Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Row(
+                      children: [
+                        SkeletonBox(
+                          width: 40,
+                          height: 40,
+                          borderRadius: 20,
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              SkeletonBox(
+                                width: 120,
+                                height: 14,
+                                borderRadius: 4,
+                              ),
+                              const SizedBox(height: 4),
+                              SkeletonBox(
+                                width: 60,
+                                height: 20,
+                                borderRadius: 4,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  )),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// Product Detail Screen Skeleton
+class ProductDetailScreenSkeleton extends StatelessWidget {
+  const ProductDetailScreenSkeleton({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Product Image Skeleton
+            ShimmerEffect(
+              baseColor: AppTheme.secondaryDark.withOpacity(0.5),
+              highlightColor: AppTheme.secondaryDark.withOpacity(0.8),
+              child: Container(
+                width: double.infinity,
+                height: 300,
+                decoration: BoxDecoration(
+                  color: AppTheme.secondaryDark.withOpacity(0.6),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            // Title Skeleton
+            SkeletonBox(
+              width: double.infinity,
+              height: 24,
+              borderRadius: 8,
+            ),
+            const SizedBox(height: 8),
+            SkeletonBox(
+              width: MediaQuery.of(context).size.width * 0.7,
+              height: 24,
+              borderRadius: 8,
+            ),
+            const SizedBox(height: 16),
+            // Price Skeleton
+            SkeletonBox(
+              width: 150,
+              height: 32,
+              borderRadius: 8,
+            ),
+            const SizedBox(height: 24),
+            // Chart Skeleton
+            GlassContainer(
+              padding: const EdgeInsets.all(20),
+              borderRadius: 20,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SkeletonBox(
+                    width: 120,
+                    height: 18,
+                    borderRadius: 4,
+                  ),
+                  const SizedBox(height: 16),
+                  SkeletonBox(
+                    width: double.infinity,
+                    height: 200,
+                    borderRadius: 12,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            // Buttons Skeleton
+            SkeletonBox(
+              width: double.infinity,
+              height: 50,
+              borderRadius: 16,
+            ),
+            const SizedBox(height: 12),
+            SkeletonBox(
+              width: double.infinity,
+              height: 50,
+              borderRadius: 16,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// Notification Item Skeleton
+class NotificationItemSkeleton extends StatelessWidget {
+  const NotificationItemSkeleton({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassContainer(
+      padding: const EdgeInsets.all(16),
+      borderRadius: 16,
+      child: Row(
+        children: [
+          // Icon Skeleton
+          SkeletonBox(
+            width: 48,
+            height: 48,
+            borderRadius: 24,
+          ),
+          const SizedBox(width: 16),
+          // Content Skeleton
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SkeletonBox(
+                  width: double.infinity,
+                  height: 16,
+                  borderRadius: 4,
+                ),
+                const SizedBox(height: 8),
+                SkeletonBox(
+                  width: MediaQuery.of(context).size.width * 0.6,
+                  height: 14,
+                  borderRadius: 4,
+                ),
+                const SizedBox(height: 4),
+                SkeletonBox(
+                  width: 100,
+                  height: 12,
+                  borderRadius: 4,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// Notifications Screen Skeleton
+class NotificationsScreenSkeleton extends StatelessWidget {
+  final int itemCount;
+  
+  const NotificationsScreenSkeleton({
+    Key? key,
+    this.itemCount = 5,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView.builder(
+      padding: const EdgeInsets.all(16),
+      itemCount: itemCount,
+      itemBuilder: (context, index) {
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: NotificationItemSkeleton(),
+        );
+      },
+    );
+  }
+}
+
 

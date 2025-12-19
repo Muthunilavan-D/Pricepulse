@@ -6,6 +6,7 @@ import '../services/api_service.dart';
 import '../widgets/glass_snackbar.dart';
 import '../widgets/glass_app_bar.dart';
 import 'auth/login_screen.dart';
+import '../widgets/skeleton_loader.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({Key? key}) : super(key: key);
@@ -14,13 +15,18 @@ class ProfileScreen extends StatefulWidget {
   State<ProfileScreen> createState() => _ProfileScreenState();
 }
 
-class _ProfileScreenState extends State<ProfileScreen> {
+class _ProfileScreenState extends State<ProfileScreen> with WidgetsBindingObserver {
   final _authService = AuthService();
   final _apiService = ApiService();
   List<dynamic> _products = [];
   bool _isLoading = true;
   int _selectedAvatarIndex = 0;
   String _username = '';
+  
+  // Statistics - computed values stored in state
+  int _totalTracked = 0;
+  int _currentlyTracking = 0;
+  int _boughtProducts = 0;
 
   // Avatar image paths
   final List<String> _avatarPaths = [
@@ -32,12 +38,100 @@ class _ProfileScreenState extends State<ProfileScreen> {
     'assets/avatars/man.png',
     'assets/avatars/panda.png',
   ];
+  
+  // Helper method to compute statistics from products list
+  void _computeStatistics() {
+    int total = _products.length;
+    int tracking = 0;
+    int bought = 0;
+    
+    for (var product in _products) {
+      final isBought = product['isBought'];
+      
+      // Check if product is bought
+      if (isBought == true || 
+          isBought == 'true' || 
+          isBought == 1 || 
+          isBought == '1') {
+        bought++;
+      } else {
+        // Everything else (null, false, etc.) is considered "tracking"
+        tracking++;
+      }
+    }
+    
+    print('📊 Computing Statistics:');
+    print('   Total products: $total');
+    print('   Currently tracking: $tracking');
+    print('   Bought: $bought');
+    print('   Verification: ${tracking + bought} == $total: ${tracking + bought == total}');
+    
+    setState(() {
+      _totalTracked = total;
+      _currentlyTracking = tracking;
+      _boughtProducts = bought;
+    });
+  }
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadProfile();
     _loadProducts();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    // Refresh when app comes to foreground
+    if (state == AppLifecycleState.resumed && mounted) {
+      _refreshProducts();
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Refresh products when screen becomes visible
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        // Small delay to ensure we're actually visible
+        Future.delayed(const Duration(milliseconds: 100), () {
+          if (mounted) {
+            _refreshProducts();
+          }
+        });
+      }
+    });
+  }
+
+  Future<void> _refreshProducts() async {
+    try {
+      print('🔄 Refreshing products from API...');
+      final products = await _apiService.getProducts();
+      
+      if (mounted) {
+        print('✅ Refreshed ${products.length} products from API');
+        
+        // Update products list
+        setState(() {
+          _products = products;
+        });
+        
+        // Compute statistics after updating products
+        _computeStatistics();
+      }
+    } catch (e) {
+      print('❌ Error refreshing products: $e');
+      // Don't clear products on error, just log it
+    }
   }
 
   Future<void> _loadProfile() async {
@@ -64,12 +158,43 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Future<void> _loadProducts() async {
     try {
-      final products = await _apiService.getProducts();
       setState(() {
-        _products = products;
+        _isLoading = true;
       });
+      
+      print('📦 Loading products from API...');
+      final products = await _apiService.getProducts();
+      
+      if (mounted) {
+        print('✅ Received ${products.length} products from API');
+        
+        // Log sample products for debugging
+        if (products.isNotEmpty) {
+          print('Sample products:');
+          for (int i = 0; i < products.length && i < 3; i++) {
+            final p = products[i];
+            print('   ${i + 1}. "${p['title']?.toString().substring(0, 30) ?? 'N/A'}" - isBought: ${p['isBought']} (type: ${p['isBought']?.runtimeType})');
+          }
+        }
+        
+        // Update products list
+        setState(() {
+          _products = products;
+          _isLoading = false;
+        });
+        
+        // Compute statistics after updating products
+        _computeStatistics();
+      }
     } catch (e) {
-      print('Error loading products: $e');
+      print('❌ Error loading products: $e');
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _products = [];
+        });
+        _computeStatistics(); // Update stats to show zeros
+      }
     }
   }
 
@@ -375,17 +500,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  int _getTotalTracked() => _products.length;
-
-  int _getCurrentlyTracking() {
-    // Count products that are not bought
-    return _products.where((p) => p['isBought'] != true).length;
-  }
-
-  int _getBoughtProducts() {
-    // Count products that were marked as bought
-    return _products.where((p) => p['isBought'] == true).length;
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -405,13 +519,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
         ),
         body: _isLoading
-            ? Center(
-                child: CircularProgressIndicator(
-                  valueColor: AlwaysStoppedAnimation<Color>(
-                    AppTheme.accentBlue,
-                  ),
-                ),
-              )
+            ? const ProfileScreenSkeleton()
             : SafeArea(
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.all(16),
@@ -533,7 +641,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             const SizedBox(height: 16),
                             _buildStatItem(
                               'Total Tracked',
-                              '${_getTotalTracked()}',
+                              '$_totalTracked',
                               Icons.inventory_2_rounded,
                               AppTheme.accentBlue,
                               AppTheme.textPrimary,
@@ -541,7 +649,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             const SizedBox(height: 12),
                             _buildStatItem(
                               'Currently Tracking',
-                              '${_getCurrentlyTracking()}',
+                              '$_currentlyTracking',
                               Icons.track_changes_rounded,
                               AppTheme.accentGreen,
                               AppTheme.textPrimary,
@@ -549,7 +657,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             const SizedBox(height: 12),
                             _buildStatItem(
                               'Bought Products',
-                              '${_getBoughtProducts()}',
+                              '$_boughtProducts',
                               Icons.check_circle_rounded,
                               AppTheme.accentPurple,
                               AppTheme.textPrimary,

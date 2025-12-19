@@ -97,31 +97,43 @@ class _AddProductScreenState extends State<AddProductScreen> {
     } catch (e) {
       if (mounted) {
         String errorMessage = e.toString();
+        SnackBarType snackBarType = SnackBarType.error;
+        
         if (errorMessage.startsWith('Exception: ')) {
           errorMessage = errorMessage.substring(11);
         }
 
+        // Handle threshold validation error (40% rule) - CHECK THIS FIRST before other errors
+        // This must come before "Could not fetch" check to avoid incorrect error messages
+        if (errorMessage.contains('must be at least 40%') ||
+            (errorMessage.contains('Threshold price') && errorMessage.contains('40%'))) {
+          errorMessage = 'Threshold must be at least 40% of the product price.';
+          snackBarType = SnackBarType.warning;
+        }
+        // Handle generic threshold errors
+        else if (errorMessage.contains('Threshold price must be less') ||
+                 errorMessage.contains('Threshold must be less')) {
+          errorMessage = 'Threshold must be less than current price.';
+          snackBarType = SnackBarType.warning;
+        }
         // Handle duplicate product error
-        if (errorMessage.contains('already being tracked') ||
-            errorMessage.contains('duplicate')) {
+        else if (errorMessage.contains('already being tracked') ||
+                 errorMessage.contains('duplicate')) {
           errorMessage = 'This product is already being tracked.';
+        }
+        // Handle scraping/network errors with concise message (only if not a threshold error)
+        else if (errorMessage.contains('Could not fetch') ||
+                 errorMessage.contains('scraping') ||
+                 errorMessage.contains('network') ||
+                 errorMessage.contains('CAPTCHA')) {
+          errorMessage = 'Could not fetch product details. Please try again.';
         }
 
         GlassSnackBar.show(
           context,
           message: errorMessage,
-          type: SnackBarType.error,
-          duration: const Duration(seconds: 5),
-          action: TextButton(
-            onPressed: () {},
-            child: const Text(
-              'OK',
-              style: TextStyle(
-                color: AppTheme.textPrimary,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
+          type: snackBarType,
+          duration: const Duration(seconds: 4),
         );
       }
     } finally {

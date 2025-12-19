@@ -7,6 +7,7 @@ import '../widgets/glassmorphism_widget.dart';
 import '../widgets/glass_snackbar.dart';
 import 'product_detail_screen.dart';
 import '../services/api_service.dart';
+import '../widgets/skeleton_loader.dart';
 
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({Key? key}) : super(key: key);
@@ -224,9 +225,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           ],
         ),
         body: _isLoading
-            ? const Center(
-                child: CircularProgressIndicator(color: AppTheme.accentBlue),
-              )
+            ? const NotificationsScreenSkeleton(itemCount: 5)
             : _notifications.isEmpty
             ? Center(
                 child: Padding(

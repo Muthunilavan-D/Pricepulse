@@ -209,6 +209,16 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
       return;
     }
 
+    // Validate threshold is at least 40% of current price
+    if (currentPrice != null && threshold < (currentPrice * 0.4)) {
+      GlassSnackBar.show(
+        context,
+        message: 'Threshold must be at least 40% of the current price.',
+        type: SnackBarType.warning,
+      );
+      return;
+    }
+
     setState(() {
       _isLoading = true;
     });
@@ -231,13 +241,30 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     } catch (e) {
       if (mounted) {
         String errorMsg = e.toString();
+        SnackBarType snackBarType = SnackBarType.error;
+        
         if (errorMsg.contains('Exception: ')) {
           errorMsg = errorMsg.substring(11);
         }
+        
+        // Handle threshold validation error (40% rule) - CHECK THIS FIRST
+        // This must come before other error checks to avoid incorrect error messages
+        if (errorMsg.contains('must be at least 40%') ||
+            (errorMsg.contains('Threshold price') && errorMsg.contains('40%'))) {
+          errorMsg = 'Threshold must be at least 40% of the current price.';
+          snackBarType = SnackBarType.warning;
+        }
+        // Handle generic threshold errors
+        else if (errorMsg.contains('Threshold price must be less') ||
+                 errorMsg.contains('Threshold must be less')) {
+          errorMsg = 'Threshold must be less than current price.';
+          snackBarType = SnackBarType.warning;
+        }
+        
         GlassSnackBar.show(
           context,
-          message: 'Error: $errorMsg',
-          type: SnackBarType.error,
+          message: errorMsg,
+          type: snackBarType,
           duration: const Duration(seconds: 4),
         );
       }
@@ -354,8 +381,18 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     final minPrice = prices.reduce((a, b) => a < b ? a : b);
     final maxPrice = prices.reduce((a, b) => a > b ? a : b);
     final priceRange = maxPrice - minPrice;
-    final chartMin = minPrice - (priceRange * 0.1);
-    final chartMax = maxPrice + (priceRange * 0.1);
+    
+    // Handle case where all prices are the same (priceRange == 0)
+    // Add a minimum range to prevent horizontalInterval from being zero
+    // Use 10% of the price as padding, with a minimum absolute value of 10.0
+    final minPadding = (minPrice * 0.1).clamp(10.0, double.infinity);
+    final effectiveRange = priceRange > 0 ? priceRange : minPadding;
+    
+    final chartMin = minPrice - (effectiveRange * 0.1);
+    final chartMax = maxPrice + (effectiveRange * 0.1);
+    
+    // Ensure chartMax - chartMin is never zero (safety check)
+    final chartRange = (chartMax - chartMin).clamp(1.0, double.infinity);
 
     final spots = chartData.asMap().entries.map((entry) {
       final index = entry.key.toDouble();
@@ -409,7 +446,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                 gridData: FlGridData(
                   show: true,
                   drawVerticalLine: false,
-                  horizontalInterval: (chartMax - chartMin) / 4,
+                  horizontalInterval: chartRange / 4,
                   getDrawingHorizontalLine: (value) {
                     return FlLine(
                       color: AppTheme.glassBorder,
@@ -450,7 +487,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                     sideTitles: SideTitles(
                       showTitles: true,
                       reservedSize: 50,
-                      interval: (chartMax - chartMin) / 4,
+                      interval: chartRange / 4,
                       getTitlesWidget: (value, meta) {
                         return Text(
                           PriceFormatter.formatNumber(value),
