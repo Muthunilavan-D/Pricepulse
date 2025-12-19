@@ -9,7 +9,7 @@ class ApiService {
   // 🔧 CONFIGURATION FOR PHYSICAL DEVICE:
   // Replace 'YOUR_COMPUTER_IP' with your actual IP address from ipconfig
   // Example: 'http://192.168.1.5:5000'
-  static const String PHYSICAL_DEVICE_URL = 'http://192.168.31.248:5000';
+  static const String PHYSICAL_DEVICE_URL = 'https://price-pulse-backend-1mtr.onrender.com';
 
   // Set this to true if using a physical device, false for emulator
   static const bool USE_PHYSICAL_DEVICE = true;

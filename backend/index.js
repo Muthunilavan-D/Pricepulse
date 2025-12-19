@@ -1087,6 +1087,12 @@ app.post('/track-product', async (req, res) => {
 
   console.log('Tracking product from URL:', url);
   
+  // Get userId from request body first (needed throughout the function)
+  const userId = req.body.userId;
+  if (!userId) {
+    return res.status(400).json({ error: 'User ID is required' });
+  }
+  
   // First resolve shortened URLs, then normalize for duplicate check
   // This ensures we check against the same format that will be stored
   const resolvedUrl = await resolveShortUrl(url);
@@ -1103,12 +1109,6 @@ app.post('/track-product', async (req, res) => {
   
   try {
     console.log('🔍 Starting comprehensive duplicate check...');
-    
-    // Get userId from request body for duplicate check
-    const userId = req.body.userId;
-    if (!userId) {
-      return res.status(400).json({ error: 'User ID is required' });
-    }
 
     // OPTIMIZED: Only check duplicates for the same user (userId filter)
     // This is much faster and ensures proper data isolation
@@ -1248,11 +1248,7 @@ app.post('/track-product', async (req, res) => {
   // Store normalized URL to prevent duplicates (use the one we already calculated)
   const finalNormalizedUrl = normalizedUrlForCheck;
 
-  // Get userId from request body
-  const userId = req.body.userId;
-  if (!userId) {
-    return res.status(400).json({ error: 'User ID is required' });
-  }
+  // userId is already declared at the beginning of the function
 
   const product = {
     url: finalNormalizedUrl, // Store normalized URL to prevent duplicates

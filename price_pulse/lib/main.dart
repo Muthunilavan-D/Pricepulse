@@ -73,35 +73,13 @@ class _AuthWrapperState extends State<AuthWrapper> {
     super.initState();
     // Check current user immediately
     _currentUser = FirebaseAuth.instance.currentUser;
-    print(
-      '🔍 AuthWrapper init: currentUser = ${_currentUser?.email ?? "null"}',
-    );
 
-    // Listen to user changes stream and force rebuild
+    // Listen to user changes stream and update state
     _authSubscription = FirebaseAuth.instance.userChanges().listen((user) {
-      if (mounted) {
-        print('🔄 User changed in stream: ${user?.email ?? "null"}');
-        if (user != _currentUser) {
-          setState(() {
-            _currentUser = user;
-          });
-        }
-      }
-    });
-
-    // Also set up a periodic check to catch any missed updates
-    // This ensures we catch the user even if stream is delayed
-    Future.delayed(const Duration(milliseconds: 500), () {
-      if (mounted) {
-        final latestUser = FirebaseAuth.instance.currentUser;
-        if (latestUser != _currentUser) {
-          print(
-            '🔄 Periodic check: User detected = ${latestUser?.email ?? "null"}',
-          );
-          setState(() {
-            _currentUser = latestUser;
-          });
-        }
+      if (mounted && user != _currentUser) {
+        setState(() {
+          _currentUser = user;
+        });
       }
     });
   }
@@ -114,47 +92,24 @@ class _AuthWrapperState extends State<AuthWrapper> {
 
   @override
   Widget build(BuildContext context) {
-    // Always check current user directly first (most up-to-date)
-    // This is synchronous and immediate - no waiting for streams
-    final currentUser = FirebaseAuth.instance.currentUser;
+    // Use _currentUser which is updated by the stream listener
+    // This prevents infinite rebuild loops
+    final user = _currentUser;
 
-    // Update local state if changed (for stream listener)
-    if (currentUser != _currentUser) {
-      // Update state immediately in next frame
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && currentUser != _currentUser) {
-          setState(() {
-            _currentUser = currentUser;
-          });
-        }
-      });
-    }
-
-    // ALWAYS use currentUser directly (most up-to-date, synchronous check)
-    // Don't rely on _currentUser or stream data - check Firebase directly
-    final user = currentUser;
-
-    print(
-      '🔍 AuthWrapper build: user = ${user?.email ?? "null"}, currentUser = ${currentUser?.email ?? "null"}, _currentUser = ${_currentUser?.email ?? "null"}',
-    );
-
-    // If user is signed in, show HomeScreen immediately
+    // If user is signed in, show HomeScreen
     if (user != null) {
       final isGoogleUser = user.providerData.any(
         (p) => p.providerId == 'google.com',
       );
 
       if (user.emailVerified || isGoogleUser) {
-        print('✅ User authenticated: ${user.email}, showing HomeScreen');
         return const HomeScreen();
       } else {
-        print('⚠️ User not verified: ${user.email}, showing LoginScreen');
         return const LoginScreen();
       }
     }
 
     // If user is not signed in, show LoginScreen
-    print('ℹ️ No authenticated user, showing LoginScreen');
     return const LoginScreen();
   }
 }
