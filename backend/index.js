@@ -1657,6 +1657,16 @@ app.post('/track-product', async (req, res) => {
       
       if (!existingUrl) continue;
       
+      // Skip products that are marked as bought - allow re-adding them
+      const isBought = productData.isBought === true || 
+                       productData.isBought === 'true' || 
+                       productData.isBought === 1 ||
+                       productData.isBought === '1';
+      if (isBought) {
+        console.log(`⏭️  Skipping bought product: "${productData.title?.substring(0, 30) ?? 'N/A'}" - can be re-added`);
+        continue;
+      }
+      
       // Just normalize existing URL (no resolution needed - stored URLs are already normalized)
       const normalizedExisting = normalizeUrl(existingUrl) || existingUrl;
       
@@ -1770,21 +1780,32 @@ app.post('/track-product', async (req, res) => {
   }
 
   // FINAL duplicate check right before saving (double safety) - check per user
+  // Skip products that are marked as bought - allow re-adding them
   try {
     const finalCheck = await db.collection('products')
       .where('url', '==', normalizedUrlForCheck)
       .where('userId', '==', userId)
-      .limit(1)
       .get();
     
-    if (!finalCheck.empty) {
-      const existing = finalCheck.docs[0].data();
-      console.log('❌❌❌ FINAL CHECK: Duplicate detected right before save!');
-      return res.status(409).json({ 
-        error: 'This product is already being tracked',
-        existingProductId: finalCheck.docs[0].id,
-        existingProductTitle: existing.title
-      });
+    // Check if there's an active (not bought) duplicate
+    for (const doc of finalCheck.docs) {
+      const existing = doc.data();
+      const isBought = existing.isBought === true || 
+                       existing.isBought === 'true' || 
+                       existing.isBought === 1 ||
+                       existing.isBought === '1';
+      
+      // Only block if it's an active (not bought) product
+      if (!isBought) {
+        console.log('❌❌❌ FINAL CHECK: Active duplicate detected right before save!');
+        return res.status(409).json({ 
+          error: 'This product is already being tracked',
+          existingProductId: doc.id,
+          existingProductTitle: existing.title
+        });
+      } else {
+        console.log(`⏭️  FINAL CHECK: Found bought product "${existing.title?.substring(0, 30) ?? 'N/A'}" - allowing re-add`);
+      }
     }
   } catch (finalCheckError) {
     console.error('Error in final duplicate check:', finalCheckError);
