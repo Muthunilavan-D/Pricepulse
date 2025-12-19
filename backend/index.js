@@ -176,6 +176,31 @@ async function resolveShortUrl(url) {
             console.log(`✅ Found canonical URL: ${canonical}`);
             return canonical;
           }
+          
+          // Try to find redirect in meta tag
+          const metaRefresh = $('meta[http-equiv="refresh"]').attr('content');
+          if (metaRefresh) {
+            const urlMatch = metaRefresh.match(/url=(.+)/i);
+            if (urlMatch && urlMatch[1]) {
+              let redirectUrl = urlMatch[1].trim();
+              if (!redirectUrl.startsWith('http')) {
+                redirectUrl = isShortenedAmazon 
+                  ? `https://www.amazon.in${redirectUrl}` 
+                  : `https://www.flipkart.com${redirectUrl}`;
+              }
+              console.log(`✅ Found redirect URL from meta refresh: ${redirectUrl}`);
+              return redirectUrl;
+            }
+          }
+        }
+        
+        // If URL resolution failed but we got a response, try using the response URL
+        if (response.request && response.request.res && response.request.res.responseUrl) {
+          const responseUrl = response.request.res.responseUrl;
+          if (responseUrl && responseUrl !== url && (responseUrl.includes('amazon') || responseUrl.includes('flipkart'))) {
+            console.log(`✅ Using response URL: ${responseUrl}`);
+            return responseUrl;
+          }
         }
         
         console.log(`⚠️ Could not resolve shortened URL, using original: ${url}`);
@@ -217,40 +242,85 @@ function normalizeUrl(url) {
 }
 
 // Helper function to scrape product
-async function scrapeProduct(url) {
+const MAX_RETRIES = 2;
+async function scrapeProduct(url, retryCount = 0) {
   try {
-    console.log(`\n🔍 Starting scrape for URL: ${url}`);
+    console.log(`\n🔍 Starting scrape for URL: ${url}${retryCount > 0 ? ` (Retry ${retryCount}/${MAX_RETRIES})` : ''}`);
     
     // First, resolve shortened URLs (like dl.flipkart.com)
     const resolvedUrl = await resolveShortUrl(url);
     console.log(`📎 Resolved URL: ${resolvedUrl}`);
     
     // Then normalize URL
-    const normalizedUrl = normalizeUrl(resolvedUrl);
+    let normalizedUrl = normalizeUrl(resolvedUrl);
     console.log(`🔧 Normalized URL: ${normalizedUrl}`);
+    
+    // On retry, try mobile version if it's Amazon
+    if (retryCount > 0 && normalizedUrl.includes('amazon.in')) {
+      normalizedUrl = normalizedUrl.replace('www.amazon.in', 'm.amazon.in');
+      console.log(`📱 Retrying with mobile version: ${normalizedUrl}`);
+    }
+    
     console.log(`🌐 Final URL to scrape: ${normalizedUrl}`);
 
-    // Enhanced headers to mimic a real browser
+    // Enhanced headers to mimic a real browser (more realistic)
     const headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Accept-Encoding': 'gzip, deflate, br',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+      'Accept-Language': 'en-IN,en-US;q=0.9,en;q=0.8',
+      'Accept-Encoding': 'gzip, deflate, br, zstd',
       'Connection': 'keep-alive',
       'Upgrade-Insecure-Requests': '1',
       'Sec-Fetch-Dest': 'document',
       'Sec-Fetch-Mode': 'navigate',
       'Sec-Fetch-Site': 'none',
-      'Cache-Control': 'max-age=0'
+      'Sec-Fetch-User': '?1',
+      'Cache-Control': 'max-age=0',
+      'Referer': 'https://www.google.com/',
+      'DNT': '1',
+      'sec-ch-ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+      'sec-ch-ua-mobile': '?0',
+      'sec-ch-ua-platform': '"Windows"'
     };
 
-    const { data } = await axios.get(normalizedUrl, {
-      headers: headers,
-      timeout: 20000,
-      maxRedirects: 5
-    });
+    let response;
+    try {
+      response = await axios.get(normalizedUrl, {
+        headers: headers,
+        timeout: 20000,
+        maxRedirects: 5,
+        validateStatus: (status) => status >= 200 && status < 500
+      });
+    } catch (requestError) {
+      console.error('❌ Request failed:', requestError.message);
+      if (requestError.response) {
+        console.error('   Status:', requestError.response.status);
+        console.error('   Status text:', requestError.response.statusText);
+      }
+      throw requestError;
+    }
 
-    const $ = cheerio.load(data);
+    // Check if we got redirected to a different URL
+    const finalRequestUrl = response.request?.res?.responseURL || response.request?.responseURL || normalizedUrl;
+    if (finalRequestUrl !== normalizedUrl) {
+      console.log(`📎 Request was redirected to: ${finalRequestUrl}`);
+    }
+
+    const $ = cheerio.load(response.data);
+    
+    // Check if page is blocked or requires CAPTCHA (but don't fail immediately - try to extract data first)
+    const pageHtml = $.html().toLowerCase();
+    const pageText = $.text().toLowerCase();
+    const isBlocked = pageHtml.includes('captcha') || 
+                     pageHtml.includes('robot') || 
+                     pageHtml.includes('sorry, we just need to make sure') ||
+                     pageText.includes('sorry, we just need to make sure') ||
+                     pageText.includes('enter the characters you see');
+    
+    if (isBlocked) {
+      console.warn('⚠️  Page may be blocked or require CAPTCHA, but attempting to extract data anyway...');
+      // Don't throw error immediately - try to extract data first
+    }
     let price = null;
     let title = null;
     let image = null;
@@ -264,6 +334,8 @@ async function scrapeProduct(url) {
     const isFlipkart = /(?:flipkart\.com|dl\.flipkart\.com|m\.flipkart\.com)/.test(normalizedUrl);
     
     if (isAmazon) {
+      console.log('🛒 Scraping Amazon product...');
+      
       // Try multiple Amazon price selectors (they change frequently)
       const priceSelectors = [
         '.a-price .a-offscreen',
@@ -275,14 +347,122 @@ async function scrapeProduct(url) {
         '.a-price[data-a-color="price"] .a-offscreen',
         '#price',
         '.apexPriceToPay .a-offscreen',
-        '#corePriceDisplay_desktop_feature_div .a-price .a-offscreen'
+        '#corePriceDisplay_desktop_feature_div .a-price .a-offscreen',
+        '.a-price-symbol + .a-price-whole',
+        'span.a-price-whole',
+        '.a-price .a-price-whole',
+        '#priceblock_saleprice',
+        '#priceblock_buyingprice',
+        '.a-size-medium.a-color-price',
+        '[id*="price"]',
+        '[class*="price"]',
+        '.a-text-price .a-offscreen',
+        'span[data-a-color="price"]'
       ];
       
+      console.log(`   Trying ${priceSelectors.length} price selectors...`);
       for (const selector of priceSelectors) {
         const priceText = $(selector).first().text().trim();
         if (priceText) {
           price = priceText;
+          console.log(`✅ Found Amazon price with selector: ${selector} = ${priceText}`);
           break;
+        }
+      }
+
+      // If all selectors fail, try extracting from JSON-LD structured data
+      if (!price) {
+        console.log('   All price selectors failed. Trying JSON-LD structured data...');
+        try {
+          const jsonLdScripts = $('script[type="application/ld+json"]');
+          for (let i = 0; i < jsonLdScripts.length; i++) {
+            try {
+              const jsonData = JSON.parse($(jsonLdScripts[i]).html());
+              if (jsonData.offers && jsonData.offers.price) {
+                const extractedPrice = jsonData.offers.price;
+                if (typeof extractedPrice === 'number') {
+                  price = `₹${extractedPrice.toLocaleString('en-IN')}`;
+                  console.log(`✅ Found price in JSON-LD: ${price}`);
+                  break;
+                } else if (typeof extractedPrice === 'string') {
+                  price = extractedPrice;
+                  console.log(`✅ Found price in JSON-LD: ${price}`);
+                  break;
+                }
+              }
+              // Also check for aggregateOffer
+              if (jsonData.aggregateOffer && jsonData.aggregateOffer.lowPrice) {
+                const extractedPrice = jsonData.aggregateOffer.lowPrice;
+                if (typeof extractedPrice === 'number') {
+                  price = `₹${extractedPrice.toLocaleString('en-IN')}`;
+                  console.log(`✅ Found price in JSON-LD aggregateOffer: ${price}`);
+                  break;
+                }
+              }
+            } catch (parseError) {
+              // Continue to next script tag
+              continue;
+            }
+          }
+        } catch (jsonError) {
+          console.log(`   JSON-LD extraction failed: ${jsonError.message}`);
+        }
+      }
+
+      // Fallback: Try extracting from embedded JavaScript data
+      if (!price) {
+        console.log('   Trying JavaScript data extraction...');
+        try {
+          // Look for Amazon's price data in script tags
+          const scripts = $('script');
+          for (let i = 0; i < scripts.length; i++) {
+            const scriptContent = $(scripts[i]).html();
+            if (scriptContent) {
+              // Try to find price in various JavaScript patterns
+              // Pattern 1: "price":1234.56 or "price":"₹1,234"
+              const pricePattern1 = /["']price["']\s*:\s*["']?([₹]?[\d,]+(?:\.\d{2})?)/i;
+              const match1 = scriptContent.match(pricePattern1);
+              if (match1 && match1[1]) {
+                price = match1[1].includes('₹') ? match1[1] : `₹${match1[1]}`;
+                console.log(`✅ Found price in JavaScript (pattern 1): ${price}`);
+                break;
+              }
+              
+              // Pattern 2: "displayPrice":"₹1,234"
+              const pricePattern2 = /["']displayPrice["']\s*:\s*["']([₹][\d,]+(?:\.\d{2})?)/i;
+              const match2 = scriptContent.match(pricePattern2);
+              if (match2 && match2[1]) {
+                price = match2[1];
+                console.log(`✅ Found price in JavaScript (pattern 2): ${price}`);
+                break;
+              }
+              
+              // Pattern 3: "amount":1234.56
+              const pricePattern3 = /["']amount["']\s*:\s*["']?([\d,]+(?:\.\d{2})?)/i;
+              const match3 = scriptContent.match(pricePattern3);
+              if (match3 && match3[1]) {
+                price = `₹${match3[1]}`;
+                console.log(`✅ Found price in JavaScript (pattern 3): ${price}`);
+                break;
+              }
+            }
+          }
+        } catch (jsError) {
+          console.log(`   JavaScript extraction failed: ${jsError.message}`);
+        }
+      }
+
+      // Fallback: Try regex pattern matching for price
+      if (!price) {
+        console.log('   Trying regex fallback for price...');
+        const allText = $.text();
+        // Match Indian Rupee prices: ₹1,234 or ₹1234 or Rs. 1,234
+        const priceRegex = /(?:₹|Rs\.?)\s*[\d,]+(?:\.\d{2})?/g;
+        const matches = allText.match(priceRegex);
+        if (matches && matches.length > 0) {
+          // Get the first substantial price (usually the main price)
+          price = matches[0].trim();
+          console.log(`✅ Found price using regex fallback: ${price}`);
         }
       }
 
@@ -291,14 +471,42 @@ async function scrapeProduct(url) {
         '#productTitle',
         'h1.a-size-large',
         'h1[data-automation-id="title"]',
-        '.product-title'
+        '.product-title',
+        'h1 span',
+        '#title',
+        'h1.a-size-base-plus',
+        'span#productTitle'
       ];
       
+      console.log(`   Trying ${titleSelectors.length} title selectors...`);
       for (const selector of titleSelectors) {
         const titleText = $(selector).text().trim();
         if (titleText) {
           title = titleText;
+          console.log(`✅ Found Amazon title with selector: ${selector}`);
           break;
+        }
+      }
+
+      // Fallback: Try JSON-LD for title
+      if (!title) {
+        console.log('   Trying JSON-LD for title...');
+        try {
+          const jsonLdScripts = $('script[type="application/ld+json"]');
+          for (let i = 0; i < jsonLdScripts.length; i++) {
+            try {
+              const jsonData = JSON.parse($(jsonLdScripts[i]).html());
+              if (jsonData.name) {
+                title = jsonData.name;
+                console.log(`✅ Found title in JSON-LD: ${title.substring(0, 50)}...`);
+                break;
+              }
+            } catch (parseError) {
+              continue;
+            }
+          }
+        } catch (jsonError) {
+          console.log(`   JSON-LD title extraction failed: ${jsonError.message}`);
         }
       }
 
@@ -308,14 +516,66 @@ async function scrapeProduct(url) {
         '#imgBlkFront',
         '.a-dynamic-image',
         '#main-image',
-        '[data-a-image-name="landingImage"]'
+        '[data-a-image-name="landingImage"]',
+        '#imgTagWrapperId img',
+        '#main-image-container img',
+        '.a-button-selected img',
+        'img[data-old-hires]',
+        'img[data-a-dynamic-image]'
       ];
       
+      console.log(`   Trying ${imageSelectors.length} image selectors...`);
       for (const selector of imageSelectors) {
-        const imgSrc = $(selector).attr('src') || $(selector).attr('data-src');
+        const imgSrc = $(selector).attr('src') || $(selector).attr('data-src') || $(selector).attr('data-old-hires') || $(selector).attr('data-a-dynamic-image');
         if (imgSrc) {
-          image = imgSrc;
-          break;
+          // Handle data-a-dynamic-image which is a JSON object
+          if (imgSrc.startsWith('{')) {
+            try {
+              const imgData = JSON.parse(imgSrc);
+              const firstKey = Object.keys(imgData)[0];
+              if (firstKey) {
+                image = firstKey;
+                console.log(`✅ Found Amazon image with selector: ${selector}`);
+                break;
+              }
+            } catch (e) {
+              continue;
+            }
+          } else {
+            image = imgSrc;
+            console.log(`✅ Found Amazon image with selector: ${selector}`);
+            break;
+          }
+        }
+      }
+
+      // Fallback: Try JSON-LD for image
+      if (!image) {
+        console.log('   Trying JSON-LD for image...');
+        try {
+          const jsonLdScripts = $('script[type="application/ld+json"]');
+          for (let i = 0; i < jsonLdScripts.length; i++) {
+            try {
+              const jsonData = JSON.parse($(jsonLdScripts[i]).html());
+              if (jsonData.image) {
+                if (Array.isArray(jsonData.image)) {
+                  image = jsonData.image[0];
+                } else if (typeof jsonData.image === 'string') {
+                  image = jsonData.image;
+                } else if (jsonData.image.url) {
+                  image = jsonData.image.url;
+                }
+                if (image) {
+                  console.log(`✅ Found image in JSON-LD`);
+                  break;
+                }
+              }
+            } catch (parseError) {
+              continue;
+            }
+          }
+        } catch (jsonError) {
+          console.log(`   JSON-LD image extraction failed: ${jsonError.message}`);
         }
       }
 
@@ -685,11 +945,39 @@ async function scrapeProduct(url) {
     }
 
     if (!price || price.length === 0) {
-      console.error('Price not found. Possible reasons:');
+      console.error('❌ Price not found. Possible reasons:');
       console.error('1. Website structure changed');
       console.error('2. Product page requires login');
       console.error('3. Product is out of stock');
       console.error('4. URL is invalid or not a product page');
+      console.error('5. Amazon is blocking the request');
+      
+      // Debug: Log page content snippet to help diagnose
+      const pageText = $.text().substring(0, 500);
+      console.error('   Page content preview:', pageText);
+      
+      // Check if page contains CAPTCHA or blocking message
+      const pageHtml = $.html().toLowerCase();
+      const isBlockedPage = pageHtml.includes('captcha') || 
+                           pageHtml.includes('robot') || 
+                           pageHtml.includes('blocked') ||
+                           pageText.includes('sorry, we just need to make sure');
+      
+      if (isBlockedPage) {
+        console.error('   ⚠️  Page appears to be blocked or requires CAPTCHA');
+      }
+      
+      // Check if it's a product page at all
+      if (!pageHtml.includes('product') && !pageHtml.includes('price') && !pageHtml.includes('amazon')) {
+        console.error('   ⚠️  Page does not appear to be a product page');
+      }
+      
+      // Retry with mobile version if we haven't already
+      if (retryCount < MAX_RETRIES && normalizedUrl.includes('amazon.in') && !normalizedUrl.includes('m.amazon.in')) {
+        console.log(`🔄 Retrying with mobile version...`);
+        return await scrapeProduct(url, retryCount + 1);
+      }
+      
       return null;
     }
 
@@ -723,6 +1011,16 @@ async function scrapeProduct(url) {
       console.error('Access denied: Website may be blocking requests');
     } else if (error.response && error.response.status === 404) {
       console.error('Page not found: URL may be invalid');
+    }
+    
+    // Retry with mobile version if we haven't already and it's an Amazon URL
+    if (retryCount < MAX_RETRIES && url.includes('amazon.in') && !url.includes('m.amazon.in')) {
+      console.log(`🔄 Retrying with mobile version after error...`);
+      try {
+        return await scrapeProduct(url, retryCount + 1);
+      } catch (retryError) {
+        console.error('Retry also failed:', retryError.message);
+      }
     }
     
     return null;
@@ -1144,7 +1442,45 @@ async function sendFCMNotification(fcmToken, title, body, data = {}) {
 }
 
 // Helper function to send notifications to all registered FCM tokens
+// Send notification to a specific user by userId
+async function sendNotificationToUser(userId, title, body, data = {}) {
+  try {
+    if (!userId) {
+      console.log('⚠️ Cannot send notification: userId is required');
+      return;
+    }
+    
+    const tokensSnapshot = await db.collection('fcm_tokens')
+      .where('userId', '==', userId)
+      .get();
+      
+    if (tokensSnapshot.empty) {
+      console.log(`⚠️ No FCM tokens found for userId: ${userId}`);
+      return;
+    }
+
+    console.log(`📤 Sending notification to ${tokensSnapshot.size} device(s) for userId: ${userId}`);
+    const sendPromises = [];
+    
+    tokensSnapshot.forEach((doc) => {
+      const tokenData = doc.data();
+      if (tokenData.token) {
+        sendPromises.push(sendFCMNotification(tokenData.token, title, body, data));
+      }
+    });
+
+    const results = await Promise.allSettled(sendPromises);
+    const successCount = results.filter(r => r.status === 'fulfilled' && r.value === true).length;
+    console.log(`✅ Sent notifications to ${successCount}/${tokensSnapshot.size} devices for userId: ${userId}`);
+  } catch (error) {
+    console.error(`❌ Error sending notification to user ${userId}: ${error.message}`);
+  }
+}
+
+// Legacy function - kept for backward compatibility but now filters by userId
 async function sendNotificationToAllUsers(title, body, data = {}) {
+  // This function is deprecated - use sendNotificationToUser instead
+  // But keeping it for backward compatibility
   try {
     const tokensSnapshot = await db.collection('fcm_tokens').get();
     if (tokensSnapshot.empty) {
@@ -1196,18 +1532,23 @@ async function checkThresholdAndNotify(docId, product, newPrice, previousPrice) 
         notificationMessage = `🎯 Price Alert! ${product.title} dropped to ${newPrice} (Threshold: ₹${thresholdNum.toFixed(0)})`;
         console.log(`🔔 THRESHOLD REACHED for ${product.title}: ${newPrice} <= ₹${thresholdNum}`);
         
-        // Send FCM push notification
-        await sendNotificationToAllUsers(
-          '🎯 Price Alert!',
-          `${product.title} dropped to ${newPrice} (Threshold: ₹${thresholdNum.toFixed(0)})`,
-          {
-            type: 'threshold_reached',
-            productId: docId,
-            productTitle: product.title,
-            currentPrice: newPrice,
-            thresholdPrice: thresholdNum.toString(),
-          }
-        );
+        // Send FCM push notification to the product owner
+        if (product.userId) {
+          await sendNotificationToUser(
+            product.userId,
+            '🎯 Price Alert!',
+            `${product.title} dropped to ${newPrice} (Threshold: ₹${thresholdNum.toFixed(0)})`,
+            {
+              type: 'threshold_reached',
+              productId: docId,
+              productTitle: product.title,
+              currentPrice: newPrice,
+              thresholdPrice: thresholdNum.toString(),
+            }
+          );
+        } else {
+          console.warn('⚠️ Cannot send notification: product.userId is missing');
+        }
       } else if (isThresholdReached) {
         // Threshold was already reached, just update flag
         thresholdReached = true;
@@ -1224,18 +1565,23 @@ async function checkThresholdAndNotify(docId, product, newPrice, previousPrice) 
         notificationMessage = `📉 Price Drop! ${product.title} dropped from ${previousPrice} to ${newPrice}`;
         console.log(`📉 PRICE DROP for ${product.title}: ${previousPrice} → ${newPrice}`);
         
-        // Send FCM push notification
-        await sendNotificationToAllUsers(
-          '📉 Price Drop!',
-          `${product.title} dropped from ${previousPrice} to ${newPrice}`,
-          {
-            type: 'price_drop',
-            productId: docId,
-            productTitle: product.title,
-            currentPrice: newPrice,
-            previousPrice: previousPrice,
-          }
-        );
+        // Send FCM push notification to the product owner
+        if (product.userId) {
+          await sendNotificationToUser(
+            product.userId,
+            '📉 Price Drop!',
+            `${product.title} dropped from ${previousPrice} to ${newPrice}`,
+            {
+              type: 'price_drop',
+              productId: docId,
+              productTitle: product.title,
+              currentPrice: newPrice,
+              previousPrice: previousPrice,
+            }
+          );
+        } else {
+          console.warn('⚠️ Cannot send notification: product.userId is missing');
+        }
       }
     }
   }
@@ -1765,10 +2111,14 @@ app.post('/restore-product', async (req, res) => {
 // FCM Token Registration Endpoint
 app.post('/register-fcm-token', async (req, res) => {
   try {
-    const { token, deviceId } = req.body;
+    const { token, deviceId, userId } = req.body;
     
     if (!token) {
       return res.status(400).json({ error: 'FCM token is required' });
+    }
+    
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' });
     }
 
     // Check if token already exists
@@ -1778,24 +2128,26 @@ app.post('/register-fcm-token', async (req, res) => {
       .get();
 
     if (!existingToken.empty) {
-      // Update existing token
+      // Update existing token with userId
       await existingToken.docs[0].ref.update({
+        userId: userId,
         updatedAt: new Date().toISOString(),
         deviceId: deviceId || null,
       });
-      console.log('✅ Updated existing FCM token');
+      console.log(`✅ Updated existing FCM token for userId: ${userId}`);
       return res.json({ message: 'FCM token updated', token: token });
     }
 
-    // Add new token
+    // Add new token with userId
     await db.collection('fcm_tokens').add({
       token: token,
+      userId: userId,
       deviceId: deviceId || null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
 
-    console.log('✅ Registered new FCM token');
+    console.log(`✅ Registered new FCM token for userId: ${userId}`);
     res.json({ message: 'FCM token registered', token: token });
   } catch (error) {
     console.error('Error registering FCM token:', error.message);

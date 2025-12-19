@@ -30,6 +30,13 @@
         </activity>
 
         <!-- ✅ Firebase Messaging Service Registration -->
+        <service
+            android:name="com.google.firebase.messaging.FirebaseMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
 
         <!-- ✅ Flutter Plugin Metadata -->
         <meta-data

@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 
 class AppTheme {
   // Dark glassmorphism color palette
-  static const Color primaryDark = Color(0xFF0A0E27);
-  static const Color secondaryDark = Color(0xFF1A1F3A);
+  static const Color primaryDark = Color.fromARGB(255, 25, 52, 82);
+  static const Color secondaryDark = Color.fromARGB(255, 17, 34, 60);
   static const Color accentBlue = Color(0xFF4A90E2);
   static const Color accentPurple = Color(0xFF9B59B6);
   static const Color accentGreen = Color(0xFF2ECC71);

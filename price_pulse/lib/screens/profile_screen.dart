@@ -175,11 +175,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         physics: const NeverScrollableScrollPhysics(),
                         gridDelegate:
                             const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 3,
-                          crossAxisSpacing: 16,
-                          mainAxisSpacing: 16,
-                          childAspectRatio: 1.0,
-                        ),
+                              crossAxisCount: 3,
+                              crossAxisSpacing: 16,
+                              mainAxisSpacing: 16,
+                              childAspectRatio: 1.0,
+                            ),
                         itemCount: _avatarPaths.length,
                         itemBuilder: (context, index) {
                           final isSelected = tempAvatarIndex == index;
@@ -376,12 +376,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   int _getTotalTracked() => _products.length;
-  
+
   int _getCurrentlyTracking() {
     // Count products that are not bought
     return _products.where((p) => p['isBought'] != true).length;
   }
-  
+
   int _getBoughtProducts() {
     // Count products that were marked as bought
     return _products.where((p) => p['isBought'] == true).length;
@@ -394,12 +394,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
         backgroundColor: Colors.transparent,
         appBar: GlassAppBar(
           automaticallyImplyLeading: true,
-          title: const Text('Profile'),
+          title: const Text(
+            'Profile',
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              letterSpacing: 1.2,
+              fontSize: 22,
+              color: Colors.white,
+            ),
+          ),
         ),
         body: _isLoading
             ? Center(
                 child: CircularProgressIndicator(
-                  valueColor: AlwaysStoppedAnimation<Color>(AppTheme.accentBlue),
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    AppTheme.accentBlue,
+                  ),
                 ),
               )
             : SafeArea(
@@ -443,15 +453,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                         fit: BoxFit.cover,
                                         errorBuilder:
                                             (context, error, stackTrace) {
-                                          return Container(
-                                            color: AppTheme.secondaryDark,
-                                            child: Icon(
-                                              Icons.person_rounded,
-                                              size: 60,
-                                              color: AppTheme.textSecondary,
-                                            ),
-                                          );
-                                        },
+                                              return Container(
+                                                color: AppTheme.secondaryDark,
+                                                child: Icon(
+                                                  Icons.person_rounded,
+                                                  size: 60,
+                                                  color: AppTheme.textSecondary,
+                                                ),
+                                              );
+                                            },
                                       ),
                                     ),
                                   ),
@@ -650,4 +660,3 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 }
-

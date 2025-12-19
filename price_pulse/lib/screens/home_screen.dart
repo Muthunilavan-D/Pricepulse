@@ -56,7 +56,10 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _searchController.addListener(_onSearchChanged);
-    _fetchProducts();
+    // Load products asynchronously without blocking UI
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _fetchProducts();
+    });
     _loadUnreadCount();
   }
 
@@ -163,40 +166,62 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _fetchProducts() async {
+    if (!mounted) return;
+
     setState(() {
       _isLoading = true;
     });
+
     try {
       final products = await _apiService.getProducts();
 
-      // Check for notifications and show them
-      await _checkAndShowNotifications(products);
+      if (!mounted) return;
 
+      // Update products first to show UI immediately
       setState(() {
         _products = products;
       });
       _applyFilters();
+
+      // Check for notifications in background (non-blocking)
+      _checkAndShowNotifications(products).catchError((e) {
+        print('Error showing notifications: $e');
+      });
     } catch (e) {
       if (mounted) {
-        GlassSnackBar.show(
-          context,
-          message: 'Error: ${e.toString()}',
-          type: SnackBarType.error,
-        );
+        // Only show error if we have no products (first load)
+        if (_products.isEmpty) {
+          GlassSnackBar.show(
+            context,
+            message: 'Error loading products: ${e.toString()}',
+            type: SnackBarType.error,
+          );
+        } else {
+          // If we have products, silently fail (might be network issue)
+          print('Error refreshing products: $e');
+        }
       }
     } finally {
-      setState(() {
-        _isLoading = false;
-        _isRefreshing = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _isRefreshing = false;
+        });
+      }
     }
   }
 
   Future<void> _checkAndShowNotifications(List<dynamic> products) async {
+    if (!mounted) return;
+
     try {
       final notificationService = NotificationService();
+      int notificationCount = 0;
+      const maxNotifications = 3; // Limit notifications to avoid spam
 
       for (var product in products) {
+        if (notificationCount >= maxNotifications) break;
+
         // Check if product has a new notification
         if (product['hasNotification'] == true &&
             product['notificationType'] != null) {
@@ -211,13 +236,16 @@ class _HomeScreenState extends State<HomeScreen> {
           if (notificationType == 'threshold_reached') {
             final thresholdPrice = product['thresholdPrice'];
             if (thresholdPrice != null) {
-              await notificationService.showThresholdReachedNotification(
-                productTitle: productTitle,
-                currentPrice: currentPrice,
-                thresholdPrice: thresholdPrice is num
-                    ? thresholdPrice.toDouble()
-                    : double.tryParse(thresholdPrice.toString()) ?? 0.0,
-              );
+              // Show notification without blocking
+              notificationService
+                  .showThresholdReachedNotification(
+                    productTitle: productTitle,
+                    currentPrice: currentPrice,
+                    thresholdPrice: thresholdPrice is num
+                        ? thresholdPrice.toDouble()
+                        : double.tryParse(thresholdPrice.toString()) ?? 0.0,
+                  )
+                  .catchError((e) => print('Error showing notification: $e'));
 
               // Store in-app notification
               appNotification = AppNotification(
@@ -232,6 +260,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 isRead: false,
               );
               notificationShown = true;
+              notificationCount++;
             }
           } else if (notificationType == 'price_drop') {
             // Get previous price from price history
@@ -243,11 +272,14 @@ class _HomeScreenState extends State<HomeScreen> {
             }
 
             if (previousPrice != null) {
-              await notificationService.showPriceDropNotification(
-                productTitle: productTitle,
-                currentPrice: currentPrice,
-                previousPrice: previousPrice,
-              );
+              // Show notification without blocking
+              notificationService
+                  .showPriceDropNotification(
+                    productTitle: productTitle,
+                    currentPrice: currentPrice,
+                    previousPrice: previousPrice,
+                  )
+                  .catchError((e) => print('Error showing notification: $e'));
 
               // Store in-app notification
               appNotification = AppNotification(
@@ -262,25 +294,21 @@ class _HomeScreenState extends State<HomeScreen> {
                 isRead: false,
               );
               notificationShown = true;
+              notificationCount++;
             }
           }
 
-          // Store notification in local storage
+          // Store notification in local storage (non-blocking)
           if (appNotification != null) {
-            await _notificationStorage.addNotification(appNotification);
-            await _loadUnreadCount();
+            _notificationStorage
+                .addNotification(appNotification)
+                .then((_) => _loadUnreadCount())
+                .catchError((e) => print('Error storing notification: $e'));
           }
 
           // Clear notification flag after showing to prevent duplicates
           if (notificationShown && productId.isNotEmpty) {
-            try {
-              // Clear the notification flag in the database
-              // We'll do this by updating the product (backend will clear it on next price update)
-              // For now, we'll just mark it as shown locally
-              print('✅ Notification shown for: $productTitle');
-            } catch (e) {
-              print('Error clearing notification flag: $e');
-            }
+            print('✅ Notification shown for: $productTitle');
           }
         }
       }
@@ -647,7 +675,6 @@ class _HomeScreenState extends State<HomeScreen> {
         _sortAscending;
   }
 
-
   Widget _buildFilterChip(String label, VoidCallback onRemove) {
     return Padding(
       padding: const EdgeInsets.only(right: 8),
@@ -904,44 +931,45 @@ class _HomeScreenState extends State<HomeScreen> {
               mainAxisAlignment: MainAxisAlignment.center,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [
-                        AppTheme.accentBlue.withOpacity(0.3),
-                        AppTheme.accentPurple.withOpacity(0.2),
-                      ],
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Image.asset(
+                    'assets/price_pulse_logo.png',
+                    width: 44,
+                    height: 44,
+                    errorBuilder: (context, error, stackTrace) => Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [
+                            AppTheme.accentBlue.withOpacity(0.3),
+                            AppTheme.accentPurple.withOpacity(0.2),
+                          ],
+                        ),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: AppTheme.accentBlue.withOpacity(0.3),
+                          width: 1,
+                        ),
+                      ),
+                      child: Icon(
+                        Icons.trending_down_rounded,
+                        color: AppTheme.accentBlue,
+                        size: 24,
+                      ),
                     ),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(
-                      color: AppTheme.accentBlue.withOpacity(0.3),
-                      width: 1,
-                    ),
-                  ),
-                  child: Icon(
-                    Icons.trending_down_rounded,
-                    color: AppTheme.accentBlue,
-                    size: 24,
                   ),
                 ),
-                const SizedBox(width: 12),
-                ShaderMask(
-                  shaderCallback: (bounds) => LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [AppTheme.accentBlue, AppTheme.accentPurple],
-                  ).createShader(bounds),
-                  child: const Text(
-                    'PricePulse',
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 1.2,
-                      fontSize: 22,
-                      color: Colors.white,
-                    ),
+                const SizedBox(width: 8),
+                const Text(
+                  'PricePulse',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.2,
+                    fontSize: 22,
+                    color: Colors.white,
                   ),
                 ),
               ],
@@ -959,6 +987,24 @@ class _HomeScreenState extends State<HomeScreen> {
                   tooltip: 'Cancel Selection',
                 )
               else ...[
+                // Refresh button
+                _GlassAppBarIconButton(
+                  icon: Icons.refresh_rounded,
+                  onPressed: _isRefreshing ? null : _refreshAllProducts,
+                  tooltip: 'Refresh All',
+                  child: _isRefreshing
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              AppTheme.textPrimary,
+                            ),
+                          ),
+                        )
+                      : null,
+                ),
                 // Notification icon with badge
                 _GlassAppBarIconButton(
                   icon: Icons.notifications_rounded,
@@ -979,23 +1025,6 @@ class _HomeScreenState extends State<HomeScreen> {
                       ? _unreadNotificationCount > 99
                             ? '99+'
                             : '$_unreadNotificationCount'
-                      : null,
-                ),
-                _GlassAppBarIconButton(
-                  icon: Icons.refresh_rounded,
-                  onPressed: _isRefreshing ? null : _refreshAllProducts,
-                  tooltip: 'Refresh All',
-                  child: _isRefreshing
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                              AppTheme.textPrimary,
-                            ),
-                          ),
-                        )
                       : null,
                 ),
                 // Profile screen navigation
