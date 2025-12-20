@@ -2053,20 +2053,41 @@ app.get('/get-products', async (req, res) => {
       return product;
     });
     
-    // Debug: Count bought products and verify isBought field
-    const boughtCount = products.filter(p => p.isBought === true).length;
-    const notBoughtCount = products.filter(p => p.isBought !== true).length;
-    console.log(`📊 GET-PRODUCTS: Returning ${products.length} products`);
-    console.log(`   ✅ Bought: ${boughtCount}, ⏳ Tracking: ${notBoughtCount}`);
+    // Filter out bought products (safety measure - they should be deleted, but clean up any existing ones)
+    const activeProducts = products.filter(p => {
+      const isBought = p.isBought === true || 
+                      p.isBought === 'true' || 
+                      p.isBought === 1 ||
+                      p.isBought === '1';
+      return !isBought;
+    });
     
-    // Verify all products have isBought field
-    const productsWithoutIsBought = products.filter(p => p.isBought === undefined).length;
-    if (productsWithoutIsBought > 0) {
-      console.warn(`⚠️  WARNING: ${productsWithoutIsBought} products missing isBought field!`);
+    // Delete any bought products found (cleanup)
+    const boughtProducts = products.filter(p => {
+      const isBought = p.isBought === true || 
+                      p.isBought === 'true' || 
+                      p.isBought === 1 ||
+                      p.isBought === '1';
+      return isBought;
+    });
+    
+    if (boughtProducts.length > 0) {
+      console.log(`🗑️  Found ${boughtProducts.length} bought product(s) to clean up`);
+      for (const boughtProduct of boughtProducts) {
+        try {
+          await db.collection('products').doc(boughtProduct.id).delete();
+          console.log(`   Deleted bought product: ${boughtProduct.title?.substring(0, 30) || 'Unknown'}`);
+        } catch (deleteError) {
+          console.error(`   Error deleting bought product ${boughtProduct.id}: ${deleteError.message}`);
+        }
+      }
     }
     
-    console.log(`✅ Returning ${products.length} products for userId: ${userId}`);
-    res.json(products);
+    // Debug: Count products
+    console.log(`📊 GET-PRODUCTS: Found ${products.length} total, ${boughtProducts.length} bought (deleted), ${activeProducts.length} active`);
+    
+    console.log(`✅ Returning ${activeProducts.length} active products for userId: ${userId}`);
+    res.json(activeProducts);
   } catch (error) {
     console.error('❌ Error fetching products:', error.message);
     res.status(500).json({ error: error.message });
@@ -2429,27 +2450,15 @@ app.post('/mark-product-bought', async (req, res) => {
     }
     const productTitle = productData.title || 'Product';
     
-    // Mark product as bought instead of deleting
-    await db.collection('products').doc(searchId).update({
-      isBought: true, // Explicitly set as boolean true
-      thresholdPrice: null, // Clear threshold when bought
-      thresholdReached: false,
-      hasNotification: false,
-      notificationType: null,
-      notificationMessage: null,
-      notificationTimestamp: null,
-    });
+    // Delete product from database to keep it clean (instead of just marking as bought)
+    await db.collection('products').doc(searchId).delete();
     
-    // Verify the update was successful
-    const updatedDoc = await db.collection('products').doc(searchId).get();
-    const updatedData = updatedDoc.data();
-    console.log(`✅ Product marked as bought: "${productTitle}"`);
-    console.log(`   Verified isBought in Firestore: ${updatedData.isBought} (type: ${typeof updatedData.isBought})`);
+    console.log(`✅ Product deleted (marked as bought): "${productTitle}"`);
     
     res.json({ 
-      message: 'Product marked as bought',
+      message: 'Product marked as bought and removed from tracking',
       productTitle: productTitle,
-      isBought: true
+      deleted: true
     });
   } catch (error) {
     console.error('❌ Mark as bought error:', error.message);
@@ -2680,20 +2689,53 @@ app.get('/background-check', async (req, res) => {
       // Fetch products in background (after response is sent)
       const snapshot = await db.collection('products').get();
       const totalProducts = snapshot.size;
-      console.log(`📦 Found ${totalProducts} product(s) to check`);
+      console.log(`📦 Found ${totalProducts} product(s) in database`);
 
       if (totalProducts === 0) {
         console.log('ℹ️ No products to check');
         return;
       }
 
-      // Process products with reduced delay (200ms instead of 500ms)
-      for (let i = 0; i < snapshot.docs.length; i++) {
-        const doc = snapshot.docs[i];
+      // Filter out bought products and clean them up
+      let deletedBought = 0;
+      const activeProducts = [];
+      
+      for (const doc of snapshot.docs) {
         const product = doc.data();
+        const isBought = product.isBought === true || 
+                        product.isBought === 'true' || 
+                        product.isBought === 1 ||
+                        product.isBought === '1';
+        
+        if (isBought) {
+          // Delete bought products to keep database clean
+          try {
+            await db.collection('products').doc(doc.id).delete();
+            deletedBought++;
+            console.log(`🗑️  Deleted bought product: ${product.title?.substring(0, 50) || 'Unknown'}`);
+          } catch (deleteError) {
+            console.error(`❌ Error deleting bought product ${doc.id}: ${deleteError.message}`);
+          }
+        } else {
+          // Only process active (not bought) products
+          activeProducts.push({ doc, product });
+        }
+      }
+
+      const activeCount = activeProducts.length;
+      console.log(`📊 Active products: ${activeCount}, Deleted bought: ${deletedBought}`);
+
+      if (activeCount === 0) {
+        console.log('ℹ️ No active products to check');
+        return;
+      }
+
+      // Process active products with reduced delay (200ms instead of 500ms)
+      for (let i = 0; i < activeProducts.length; i++) {
+        const { doc, product } = activeProducts[i];
         
         try {
-          console.log(`\n[${i + 1}/${totalProducts}] Checking: ${product.title?.substring(0, 50)}...`);
+          console.log(`\n[${i + 1}/${activeCount}] Checking: ${product.title?.substring(0, 50)}...`);
           
           // Scrape product with timeout
           const newData = await Promise.race([
@@ -2720,7 +2762,7 @@ app.get('/background-check', async (req, res) => {
           }
           
           // Reduced delay between requests (200ms instead of 500ms)
-          if (i < snapshot.docs.length - 1) {
+          if (i < activeProducts.length - 1) {
             await new Promise(resolve => setTimeout(resolve, 200));
           }
         } catch (error) {
@@ -2734,7 +2776,7 @@ app.get('/background-check', async (req, res) => {
 
       const duration = Date.now() - startTime;
       console.log(`\n✅ Background check completed in ${(duration / 1000).toFixed(2)}s`);
-      console.log(`   Updated: ${updated}, Failed: ${failed}`);
+      console.log(`   Updated: ${updated}, Failed: ${failed}, Deleted bought: ${deletedBought}`);
     } catch (error) {
       console.error('❌ Background processing error:', error.message);
     }
@@ -2792,6 +2834,8 @@ app.post('/restore-product', async (req, res) => {
     };
 
     // Check if product already exists for this user
+    // Note: Deleted/bought products are removed from database, so they cannot be restored
+    // This check prevents duplicates for active products only
     const existing = await db.collection('products')
       .where('url', '==', productData.url)
       .where('userId', '==', userId)
@@ -2799,10 +2843,23 @@ app.post('/restore-product', async (req, res) => {
       .get();
 
     if (!existing.empty) {
-      return res.status(409).json({ 
-        error: 'Product already exists',
-        product: { id: existing.docs[0].id, ...existing.docs[0].data() }
-      });
+      const existingProduct = existing.docs[0].data();
+      // Additional safety: Check if existing product is bought (shouldn't exist, but just in case)
+      const isBought = existingProduct.isBought === true || 
+                      existingProduct.isBought === 'true' || 
+                      existingProduct.isBought === 1 ||
+                      existingProduct.isBought === '1';
+      
+      if (isBought) {
+        // Delete bought product if found (cleanup)
+        await db.collection('products').doc(existing.docs[0].id).delete();
+        console.log(`🗑️  Deleted bought product found during restore: ${existingProduct.title?.substring(0, 30) || 'Unknown'}`);
+      } else {
+        return res.status(409).json({ 
+          error: 'Product already exists',
+          product: { id: existing.docs[0].id, ...existingProduct }
+        });
+      }
     }
 
     const docRef = await db.collection('products').add(product);
