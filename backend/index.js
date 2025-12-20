@@ -2651,108 +2651,94 @@ app.post('/remove-threshold', async (req, res) => {
 // This endpoint checks all products and updates prices
 // Optimized to respond quickly and process in background
 app.get('/background-check', async (req, res) => {
-  try {
-    // Verify API key for security
-    const apiKey = req.query.apiKey || req.headers['x-api-key'];
-    const validApiKey = '2IcwKctWD2JzIqbPxHhcDN68fxDcxXpCLFLdUQKYbf0=';
-    
-    if (apiKey !== validApiKey) {
-      console.log('❌ Unauthorized background check attempt');
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-
-    console.log('\n🔄 Starting background price check...');
-    const startTime = Date.now();
-    
-    // Get products count first
-    const snapshot = await db.collection('products').get();
-    const totalProducts = snapshot.size;
-    console.log(`📦 Found ${totalProducts} product(s) to check`);
-
-    if (totalProducts === 0) {
-      return res.json({ 
-        message: 'No products to check',
-        checked: 0,
-        updated: 0,
-        failed: 0,
-        duration: 0
-      });
-    }
-
-    // Respond immediately to avoid timeout, then process in background
-    res.json({ 
-      message: 'Background check started',
-      checked: totalProducts,
-      status: 'processing',
-      startedAt: new Date().toISOString()
-    });
-
-    // Process products in background (don't await - let it run async)
-    (async () => {
-      let updated = 0;
-      let failed = 0;
-      const errors = [];
-
-      try {
-        // Process products with reduced delay (200ms instead of 500ms)
-        for (let i = 0; i < snapshot.docs.length; i++) {
-          const doc = snapshot.docs[i];
-          const product = doc.data();
-          
-          try {
-            console.log(`\n[${i + 1}/${totalProducts}] Checking: ${product.title?.substring(0, 50)}...`);
-            
-            // Scrape product with timeout
-            const newData = await Promise.race([
-              scrapeProduct(product.url),
-              new Promise((_, reject) => 
-                setTimeout(() => reject(new Error('Scrape timeout')), 15000)
-              )
-            ]);
-            
-            if (newData && newData.price) {
-              // Update product price (this will also check for notifications)
-              await updateProductPrice(
-                doc.id, 
-                newData.price, 
-                product.priceHistory || [], 
-                product
-              );
-              updated++;
-              console.log(`✅ Updated: ${product.title?.substring(0, 50)} - ${newData.price}`);
-            } else {
-              failed++;
-              errors.push(`${product.title}: Could not fetch price`);
-              console.log(`❌ Failed to fetch price for: ${product.title?.substring(0, 50)}`);
-            }
-            
-            // Reduced delay between requests (200ms instead of 500ms)
-            if (i < snapshot.docs.length - 1) {
-              await new Promise(resolve => setTimeout(resolve, 200));
-            }
-          } catch (error) {
-            failed++;
-            const errorMsg = `${product.title}: ${error.message}`;
-            errors.push(errorMsg);
-            console.error(`❌ Error checking ${product.title?.substring(0, 50)}: ${error.message}`);
-            // Continue with next product even if one fails
-          }
-        }
-
-        const duration = Date.now() - startTime;
-        console.log(`\n✅ Background check completed in ${(duration / 1000).toFixed(2)}s`);
-        console.log(`   Updated: ${updated}, Failed: ${failed}`);
-      } catch (error) {
-        console.error('❌ Background processing error:', error.message);
-      }
-    })();
-    
-  } catch (error) {
-    console.error('❌ Background check error:', error.message);
-    if (!res.headersSent) {
-      res.status(500).json({ error: error.message });
-    }
+  // Verify API key for security
+  const apiKey = req.query.apiKey || req.headers['x-api-key'];
+  const validApiKey = '2IcwKctWD2JzIqbPxHhcDN68fxDcxXpCLFLdUQKYbf0=';
+  
+  if (apiKey !== validApiKey) {
+    console.log('❌ Unauthorized background check attempt');
+    return res.status(401).json({ error: 'Unauthorized' });
   }
+
+  // Respond immediately to avoid timeout - before any Firestore queries
+  res.json({ 
+    message: 'Background check started',
+    status: 'processing',
+    startedAt: new Date().toISOString()
+  });
+
+  // Process products in background (don't await - let it run async)
+  (async () => {
+    const startTime = Date.now();
+    let updated = 0;
+    let failed = 0;
+    const errors = [];
+
+    try {
+      console.log('\n🔄 Starting background price check...');
+      
+      // Fetch products in background (after response is sent)
+      const snapshot = await db.collection('products').get();
+      const totalProducts = snapshot.size;
+      console.log(`📦 Found ${totalProducts} product(s) to check`);
+
+      if (totalProducts === 0) {
+        console.log('ℹ️ No products to check');
+        return;
+      }
+
+      // Process products with reduced delay (200ms instead of 500ms)
+      for (let i = 0; i < snapshot.docs.length; i++) {
+        const doc = snapshot.docs[i];
+        const product = doc.data();
+        
+        try {
+          console.log(`\n[${i + 1}/${totalProducts}] Checking: ${product.title?.substring(0, 50)}...`);
+          
+          // Scrape product with timeout
+          const newData = await Promise.race([
+            scrapeProduct(product.url),
+            new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('Scrape timeout')), 15000)
+            )
+          ]);
+          
+          if (newData && newData.price) {
+            // Update product price (this will also check for notifications)
+            await updateProductPrice(
+              doc.id, 
+              newData.price, 
+              product.priceHistory || [], 
+              product
+            );
+            updated++;
+            console.log(`✅ Updated: ${product.title?.substring(0, 50)} - ${newData.price}`);
+          } else {
+            failed++;
+            errors.push(`${product.title}: Could not fetch price`);
+            console.log(`❌ Failed to fetch price for: ${product.title?.substring(0, 50)}`);
+          }
+          
+          // Reduced delay between requests (200ms instead of 500ms)
+          if (i < snapshot.docs.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 200));
+          }
+        } catch (error) {
+          failed++;
+          const errorMsg = `${product.title}: ${error.message}`;
+          errors.push(errorMsg);
+          console.error(`❌ Error checking ${product.title?.substring(0, 50)}: ${error.message}`);
+          // Continue with next product even if one fails
+        }
+      }
+
+      const duration = Date.now() - startTime;
+      console.log(`\n✅ Background check completed in ${(duration / 1000).toFixed(2)}s`);
+      console.log(`   Updated: ${updated}, Failed: ${failed}`);
+    } catch (error) {
+      console.error('❌ Background processing error:', error.message);
+    }
+  })();
 });
 
 // Legacy endpoint (kept for backward compatibility)
