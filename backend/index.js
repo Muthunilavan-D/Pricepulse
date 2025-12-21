@@ -1913,14 +1913,18 @@ app.post('/track-product', async (req, res) => {
 
   // userId is already declared at the beginning of the function
 
+  // Normalize initial price to whole number format for consistency
+  const initialPriceNum = normalizePriceToWholeNumber(data.price);
+  const formattedInitialPrice = initialPriceNum !== null ? formatPriceAsWholeNumber(initialPriceNum) : data.price;
+
   const product = {
     url: finalNormalizedUrl, // Store normalized URL to prevent duplicates
     title: data.title,
-    price: data.price,
+    price: formattedInitialPrice, // Store as whole number format
     image: data.image || '', // Ensure image is always a string
     lastChecked: now,
     priceHistory: [{
-      price: data.price,
+      price: formattedInitialPrice, // Store as whole number format
       date: now
     }],
     thresholdPrice: validatedThreshold,
@@ -2114,6 +2118,39 @@ function parsePrice(priceStr) {
   }
 }
 
+// Helper function to normalize price to whole number (remove ₹, commas, decimals)
+// Converts "₹1,234.56" → 1234 (whole number only, no paise)
+function normalizePriceToWholeNumber(priceStr) {
+  try {
+    if (!priceStr) return null;
+    const cleaned = String(priceStr)
+      .replace(/₹/g, '')
+      .replace(/,/g, '')
+      .replace(/Rs\./g, '')
+      .replace(/\s/g, '')
+      .trim();
+    const num = parseFloat(cleaned);
+    if (isNaN(num)) return null;
+    // Return whole number (no decimals)
+    return Math.floor(num);
+  } catch (e) {
+    return null;
+  }
+}
+
+// Helper function to format price as whole number string (₹1,234 format, no decimals)
+function formatPriceAsWholeNumber(priceNum) {
+  try {
+    if (priceNum === null || priceNum === undefined || isNaN(priceNum)) {
+      return '₹0';
+    }
+    const wholeNum = Math.floor(priceNum);
+    return `₹${wholeNum.toLocaleString('en-IN')}`;
+  } catch (e) {
+    return '₹0';
+  }
+}
+
 // Helper function to send FCM push notification
 async function sendFCMNotification(fcmToken, title, body, data = {}) {
   try {
@@ -2242,8 +2279,20 @@ async function sendNotificationToAllUsers(title, body, data = {}) {
 // Helper function to check threshold and price drops, set notification flags
 async function checkThresholdAndNotify(docId, product, newPrice, previousPrice) {
   const thresholdPrice = product.thresholdPrice;
-  const currentPriceNum = parsePrice(newPrice);
-  const previousPriceNum = previousPrice ? parsePrice(previousPrice) : null;
+  const currentPriceNum = normalizePriceToWholeNumber(newPrice);
+  const previousPriceNum = previousPrice ? normalizePriceToWholeNumber(previousPrice) : null;
+  
+  // Check if notification was already sent for current price (prevent duplicates)
+  const lastNotifiedPrice = product.hasNotification && product.notificationTimestamp 
+    ? normalizePriceToWholeNumber(product.price || newPrice) 
+    : null;
+  const currentPriceNormalized = currentPriceNum;
+  
+  // Skip notification if same price was already notified
+  const alreadyNotifiedForThisPrice = lastNotifiedPrice !== null && 
+                                     currentPriceNormalized !== null && 
+                                     lastNotifiedPrice === currentPriceNormalized &&
+                                     product.hasNotification;
   
   let thresholdReached = false;
   let priceDropped = false;
@@ -2252,17 +2301,17 @@ async function checkThresholdAndNotify(docId, product, newPrice, previousPrice) 
 
   // Check if threshold is reached
   if (thresholdPrice && currentPriceNum !== null) {
-    const thresholdNum = typeof thresholdPrice === 'number' ? thresholdPrice : parsePrice(thresholdPrice);
+    const thresholdNum = typeof thresholdPrice === 'number' ? thresholdPrice : normalizePriceToWholeNumber(thresholdPrice);
     
     if (thresholdNum !== null) {
       const isThresholdReached = currentPriceNum <= thresholdNum;
       const wasThresholdReached = product.thresholdReached || false;
 
-      // Only notify if threshold is newly reached
-      if (isThresholdReached && !wasThresholdReached) {
+      // Only notify if threshold is newly reached AND not already notified for this price
+      if (isThresholdReached && !wasThresholdReached && !alreadyNotifiedForThisPrice) {
         thresholdReached = true;
         notificationType = 'threshold_reached';
-        notificationMessage = `🎯 Price Alert! ${product.title} dropped to ${newPrice} (Threshold: ₹${thresholdNum.toFixed(0)})`;
+        notificationMessage = `🎯 Price Alert! ${product.title} dropped to ${newPrice} (Threshold: ₹${thresholdNum})`;
         console.log(`🔔 THRESHOLD REACHED for ${product.title}: ${newPrice} <= ₹${thresholdNum}`);
         
         // Send FCM push notification to the product owner
@@ -2270,7 +2319,7 @@ async function checkThresholdAndNotify(docId, product, newPrice, previousPrice) 
           await sendNotificationToUser(
             product.userId,
             '🎯 Price Alert!',
-            `${product.title} dropped to ${newPrice} (Threshold: ₹${thresholdNum.toFixed(0)})`,
+            `${product.title} dropped to ${newPrice} (Threshold: ₹${thresholdNum})`,
             {
               type: 'threshold_reached',
               productId: docId,
@@ -2285,6 +2334,10 @@ async function checkThresholdAndNotify(docId, product, newPrice, previousPrice) 
       } else if (isThresholdReached) {
         // Threshold was already reached, just update flag
         thresholdReached = true;
+        // Don't send notification if already notified for this price
+        if (alreadyNotifiedForThisPrice) {
+          console.log(`⏭️  Skipping duplicate threshold notification for ${product.title} at ${newPrice}`);
+        }
       }
     }
   }
@@ -2293,7 +2346,8 @@ async function checkThresholdAndNotify(docId, product, newPrice, previousPrice) 
   if (!thresholdReached && previousPriceNum !== null && currentPriceNum !== null) {
     if (currentPriceNum < previousPriceNum) {
       priceDropped = true;
-      if (!notificationType) {
+      // Only send notification if not already notified for this price
+      if (!notificationType && !alreadyNotifiedForThisPrice) {
         notificationType = 'price_drop';
         notificationMessage = `📉 Price Drop! ${product.title} dropped from ${previousPrice} to ${newPrice}`;
         console.log(`📉 PRICE DROP for ${product.title}: ${previousPrice} → ${newPrice}`);
@@ -2315,6 +2369,8 @@ async function checkThresholdAndNotify(docId, product, newPrice, previousPrice) 
         } else {
           console.warn('⚠️ Cannot send notification: product.userId is missing');
         }
+      } else if (alreadyNotifiedForThisPrice) {
+        console.log(`⏭️  Skipping duplicate price drop notification for ${product.title} at ${newPrice}`);
       }
     }
   }
@@ -2332,14 +2388,29 @@ async function updateProductPrice(docId, newPrice, currentPriceHistory = [], pro
   const now = new Date().toISOString();
   const priceHistory = currentPriceHistory || [];
   
-  // Get previous price for comparison
+  // Normalize new price to whole number
+  const newPriceNum = normalizePriceToWholeNumber(newPrice);
+  const formattedNewPrice = newPriceNum !== null ? formatPriceAsWholeNumber(newPriceNum) : newPrice;
+  
+  // Get previous price for comparison (for notifications)
   const previousPrice = priceHistory.length > 0 ? priceHistory[priceHistory.length - 1].price : productData.price;
   
-  // Add new price entry if price changed
+  // Normalize last price in history for comparison
   const lastPrice = priceHistory.length > 0 ? priceHistory[priceHistory.length - 1].price : null;
-  if (lastPrice !== newPrice) {
+  const lastPriceNum = lastPrice ? normalizePriceToWholeNumber(lastPrice) : null;
+  
+  // Compare normalized prices to determine if price actually changed
+  if (newPriceNum !== null && lastPriceNum !== null && newPriceNum === lastPriceNum) {
+    // Price is the same (normalized), update timestamp of last entry instead of adding duplicate
+    if (priceHistory.length > 0) {
+      priceHistory[priceHistory.length - 1].date = now;
+      // Also update the price format to ensure it's stored as whole number
+      priceHistory[priceHistory.length - 1].price = formattedNewPrice;
+    }
+  } else if (newPriceNum !== null) {
+    // Price actually changed, add new entry
     priceHistory.push({
-      price: newPrice,
+      price: formattedNewPrice, // Store as whole number format
       date: now
     });
     
@@ -2349,11 +2420,11 @@ async function updateProductPrice(docId, newPrice, currentPriceHistory = [], pro
     }
   }
 
-  // Check for threshold and price drops
-  const notificationInfo = await checkThresholdAndNotify(docId, productData, newPrice, previousPrice);
+  // Check for threshold and price drops (use formatted price for consistency)
+  const notificationInfo = await checkThresholdAndNotify(docId, productData, formattedNewPrice, previousPrice);
   
   const updateData = {
-    price: newPrice,
+    price: formattedNewPrice, // Store as whole number format
     lastChecked: now,
     priceHistory: priceHistory,
     thresholdReached: notificationInfo.thresholdReached
