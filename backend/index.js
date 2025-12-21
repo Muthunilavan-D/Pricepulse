@@ -45,6 +45,11 @@ app.get('/', (req, res) => {
   res.send('Backend is running ✅');
 });
 
+// Health check endpoint - lightweight route to prevent Render auto-sleep
+app.get('/health', (req, res) => {
+  res.status(200).send('OK');
+});
+
 // Test endpoint to verify delete route is accessible
 app.get('/test-delete', (req, res) => {
   res.json({ message: 'Delete endpoint is accessible', method: 'GET' });
