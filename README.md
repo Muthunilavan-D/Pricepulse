@@ -10,7 +10,8 @@ Price Pulse is a clean and modern **Flutter app** that helps users **track produ
 
 ## 🛠 Tech Used
 - **Flutter (Dart)**
-- **Hive Database**
+- **Firbase Database and Authentication**
+- **Cron-job for Live product scraping**
 - Local Notifications
 
 ## 📸 Screenshots
@@ -27,6 +28,7 @@ Price Pulse is a clean and modern **Flutter app** that helps users **track produ
 [⬇️ Download Latest APK](https://github.com/Muthunilavan-D/Pricepulse/releases/download/v1.0.0/price-pulse-app-release.apk)
 [![GitHub release](https://img.shields.io/github/v/release/Muthunilavan-D/Pricepulse)](https://github.com/Muthunilavan-D/Pricepulse/releases)
 
+- **(Currently supports only Amazon and Flipkart Products)**
 
 ## 🚀 Run Locally
 ```bash
